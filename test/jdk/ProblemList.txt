@@ -853,6 +853,8 @@ java/net/CookieHandler/B6644726.java 8366103 linux-aarch64,linux-x64,macosx-aarc
 # valhalla
 jdk/classfile/AccessFlagsTest.java 8366270 generic-all
 
+java/lang/invoke/VarHandles/VarHandleTestMethodHandleAccessValue.java 8367346 generic-all
+
 jdk/jfr/event/runtime/TestSyncOnValueBasedClassEvent.java 8328777 generic-all
 
 jdk/jfr/event/runtime/TestClassLoaderStatsEvent.java 8366820 generic-all
