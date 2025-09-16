@@ -95,6 +95,10 @@ inline markWord Klass::default_prototype_header(Klass* k) {
   return (k == nullptr) ? markWord::prototype() : k->prototype_header();
 }
 
+inline void Klass::set_prototype_header_klass(narrowKlass klass) {
+  // Merge narrowKlass in existing prototype header.
+  _prototype_header = _prototype_header.set_narrow_klass(klass);
+}
 
 // Loading the java_mirror does not keep its holder alive. See Klass::keep_alive().
 inline oop Klass::java_mirror() const {
