@@ -185,6 +185,8 @@ class Type;
 class TypeNode;
 class UnlockNode;
 class InlineTypeNode;
+class LoadFlatNode;
+class StoreFlatNode;
 class VectorNode;
 class LoadVectorNode;
 class LoadVectorMaskedNode;
@@ -683,6 +685,8 @@ public:
             DEFINE_CLASS_ID(Lock,             AbstractLock, 0)
             DEFINE_CLASS_ID(Unlock,           AbstractLock, 1)
           DEFINE_CLASS_ID(ArrayCopy,        Call, 4)
+        DEFINE_CLASS_ID(LoadFlat,  SafePoint, 1)
+        DEFINE_CLASS_ID(StoreFlat, SafePoint, 2)
       DEFINE_CLASS_ID(MultiBranch, Multi, 1)
         DEFINE_CLASS_ID(PCTable,     MultiBranch, 0)
           DEFINE_CLASS_ID(Catch,       PCTable, 0)
@@ -1021,6 +1025,8 @@ public:
   DEFINE_CLASS_QUERY(SubTypeCheck)
   DEFINE_CLASS_QUERY(Type)
   DEFINE_CLASS_QUERY(InlineType)
+  DEFINE_CLASS_QUERY(LoadFlat)
+  DEFINE_CLASS_QUERY(StoreFlat)
   DEFINE_CLASS_QUERY(Vector)
   DEFINE_CLASS_QUERY(VectorMaskCmp)
   DEFINE_CLASS_QUERY(VectorUnbox)
