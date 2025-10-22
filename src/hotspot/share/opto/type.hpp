@@ -27,8 +27,7 @@
 
 #include "ci/ciInlineKlass.hpp"
 #include "opto/adlcVMDeps.hpp"
-#include "runtime/handles.hpp"
-#include "runtime/sharedRuntime.hpp"
+#include "opto/compile.hpp"
 
 // Portions of code courtesy of Clifford Click
 
@@ -1211,6 +1210,7 @@ protected:
   bool          _is_ptr_to_narrowoop;
   bool          _is_ptr_to_narrowklass;
   bool          _is_ptr_to_boxed_value;
+  bool          _is_ptr_to_strict_final_field;
 
   // If not InstanceTop or InstanceBot, indicates that this is
   // a particular instance of this type which is distinct.
@@ -1292,6 +1292,7 @@ public:
   bool is_ptr_to_narrowoop_nv() const { return _is_ptr_to_narrowoop; }
   bool is_ptr_to_narrowklass_nv() const { return _is_ptr_to_narrowklass; }
   bool is_ptr_to_boxed_value()   const { return _is_ptr_to_boxed_value; }
+  bool is_ptr_to_strict_final_field() const { return _is_ptr_to_strict_final_field; }
   bool is_known_instance()       const { return _instance_id > 0; }
   int  instance_id()             const { return _instance_id; }
   bool is_known_instance_field() const { return is_known_instance() && _offset.get() >= 0; }
