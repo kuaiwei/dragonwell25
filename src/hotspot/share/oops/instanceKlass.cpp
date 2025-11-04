@@ -613,19 +613,24 @@ InstanceKlass::InstanceKlass() {
          "only for CDS");
 }
 
-InstanceKlass::InstanceKlass(const ClassFileParser &parser, KlassKind kind,
-                             markWord prototype_header,
-                             ReferenceType reference_type)
-    : Klass(kind, prototype_header), _nest_members(nullptr),
-      _nest_host(nullptr), _permitted_subclasses(nullptr),
-      _record_components(nullptr),
-      _static_field_size(parser.static_field_size()),
-      _nonstatic_oop_map_size(
-          nonstatic_oop_map_size(parser.total_oop_map_count())),
-      _itable_len(parser.itable_size()), _nest_host_index(0),
-      _init_state(allocated), _reference_type(reference_type),
-      _init_thread(nullptr), _inline_layout_info_array(nullptr),
-      _loadable_descriptors(nullptr), _adr_inlineklass_fixed_block(nullptr) {
+InstanceKlass::InstanceKlass(const ClassFileParser& parser, KlassKind kind, markWord prototype_header, ReferenceType reference_type) :
+  Klass(kind, prototype_header),
+  _nest_members(nullptr),
+  _nest_host(nullptr),
+  _permitted_subclasses(nullptr),
+  _record_components(nullptr),
+  _static_field_size(parser.static_field_size()),
+  _nonstatic_oop_map_size(nonstatic_oop_map_size(parser.total_oop_map_count())),
+  _itable_len(parser.itable_size()),
+  _nest_host_index(0),
+  _init_state(allocated),
+  _reference_type(reference_type),
+  _acmp_maps_offset(0),
+  _init_thread(nullptr),
+  _inline_layout_info_array(nullptr),
+  _loadable_descriptors(nullptr),
+  _adr_inlineklass_fixed_block(nullptr)
+{
   set_vtable_length(parser.vtable_size());
   set_access_flags(parser.access_flags());
   if (parser.is_hidden())
