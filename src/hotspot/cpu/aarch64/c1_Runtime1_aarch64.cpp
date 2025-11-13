@@ -864,7 +864,7 @@ OopMapSet* Runtime1::generate_code_for(C1StubId id, StubAssembler* sasm) {
     case C1StubId::store_flat_array_id:
       {
         StubFrame f(sasm, "store_flat_array", dont_gc_arguments);
-        OopMap* map = save_live_registers(sasm, 4);
+        OopMap* map = save_live_registers(sasm);
 
         // Called with store_parameter and not C abi
 
