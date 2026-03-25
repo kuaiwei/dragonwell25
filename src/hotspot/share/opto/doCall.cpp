@@ -25,10 +25,12 @@
 #include "ci/ciCallSite.hpp"
 #include "ci/ciMethodHandle.hpp"
 #include "ci/ciSymbols.hpp"
+#include "classfile/vmIntrinsics.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "compiler/compileBroker.hpp"
 #include "compiler/compileLog.hpp"
 #include "interpreter/linkResolver.hpp"
+#include "jvm_io.h"
 #include "logging/log.hpp"
 #include "logging/logLevel.hpp"
 #include "logging/logMessage.hpp"
@@ -37,6 +39,7 @@
 #include "opto/callGenerator.hpp"
 #include "opto/castnode.hpp"
 #include "opto/cfgnode.hpp"
+#include "opto/inlinetypenode.hpp"
 #include "opto/mulnode.hpp"
 #include "opto/parse.hpp"
 #include "opto/rootnode.hpp"
@@ -83,6 +86,64 @@ static void trace_type_profile(Compile* C, ciMethod* method, JVMState* jvms,
   if (lt.is_enabled()) {
     LogStream ls(lt);
     print_trace_type_profile(&ls, depth, prof_klass, site_count, receiver_count, true);
+  }
+}
+
+static bool arg_can_be_larval(ciMethod* callee, int arg_idx) {
+  if (callee->is_object_constructor() && arg_idx == 0) {
+    return true;
+  }
+
+  if (arg_idx != 1 || callee->intrinsic_id() == vmIntrinsicID::_none) {
+    return false;
+  }
+
+  switch (callee->intrinsic_id()) {
+    case vmIntrinsicID::_finishPrivateBuffer:
+    case vmIntrinsicID::_putBoolean:
+    case vmIntrinsicID::_putBooleanOpaque:
+    case vmIntrinsicID::_putBooleanRelease:
+    case vmIntrinsicID::_putBooleanVolatile:
+    case vmIntrinsicID::_putByte:
+    case vmIntrinsicID::_putByteOpaque:
+    case vmIntrinsicID::_putByteRelease:
+    case vmIntrinsicID::_putByteVolatile:
+    case vmIntrinsicID::_putChar:
+    case vmIntrinsicID::_putCharOpaque:
+    case vmIntrinsicID::_putCharRelease:
+    case vmIntrinsicID::_putCharUnaligned:
+    case vmIntrinsicID::_putCharVolatile:
+    case vmIntrinsicID::_putShort:
+    case vmIntrinsicID::_putShortOpaque:
+    case vmIntrinsicID::_putShortRelease:
+    case vmIntrinsicID::_putShortUnaligned:
+    case vmIntrinsicID::_putShortVolatile:
+    case vmIntrinsicID::_putInt:
+    case vmIntrinsicID::_putIntOpaque:
+    case vmIntrinsicID::_putIntRelease:
+    case vmIntrinsicID::_putIntUnaligned:
+    case vmIntrinsicID::_putIntVolatile:
+    case vmIntrinsicID::_putLong:
+    case vmIntrinsicID::_putLongOpaque:
+    case vmIntrinsicID::_putLongRelease:
+    case vmIntrinsicID::_putLongUnaligned:
+    case vmIntrinsicID::_putLongVolatile:
+    case vmIntrinsicID::_putFloat:
+    case vmIntrinsicID::_putFloatOpaque:
+    case vmIntrinsicID::_putFloatRelease:
+    case vmIntrinsicID::_putFloatVolatile:
+    case vmIntrinsicID::_putDouble:
+    case vmIntrinsicID::_putDoubleOpaque:
+    case vmIntrinsicID::_putDoubleRelease:
+    case vmIntrinsicID::_putDoubleVolatile:
+    case vmIntrinsicID::_putReference:
+    case vmIntrinsicID::_putReferenceOpaque:
+    case vmIntrinsicID::_putReferenceRelease:
+    case vmIntrinsicID::_putReferenceVolatile:
+    case vmIntrinsicID::_putValue:
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -145,7 +206,21 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
   // methods.  If these methods are replaced with specialized code,
   // then we return it as the inlined version of the call.
   CallGenerator* cg_intrinsic = nullptr;
-  if (allow_inline && allow_intrinsics) {
+  if (callee->intrinsic_id() == vmIntrinsics::_makePrivateBuffer || callee->intrinsic_id() == vmIntrinsics::_finishPrivateBuffer) {
+    // These methods must be inlined so that we don't have larval value objects crossing method
+    // boundaries
+    assert(!call_does_dispatch, "callee should not be virtual %s", callee->name()->as_utf8());
+    CallGenerator* cg = find_intrinsic(callee, call_does_dispatch);
+
+    if (cg == nullptr) {
+      // This is probably because the intrinsics is disabled from the command line
+      char reason[256];
+      jio_snprintf(reason, sizeof(reason), "cannot find an intrinsics for %s", callee->name()->as_utf8());
+      C->record_method_not_compilable(reason);
+      return nullptr;
+    }
+    return cg;
+  } else if (allow_inline && allow_intrinsics) {
     CallGenerator* cg = find_intrinsic(callee, call_does_dispatch);
     if (cg != nullptr) {
       if (cg->is_predicated()) {
@@ -601,7 +676,7 @@ void Parse::do_call() {
 
   // Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
   ciKlass* receiver_constraint = nullptr;
-  if (iter().cur_bc_raw() == Bytecodes::_invokespecial && !orig_callee->is_object_initializer()) {
+  if (iter().cur_bc_raw() == Bytecodes::_invokespecial && !orig_callee->is_object_constructor()) {
     ciInstanceKlass* calling_klass = method()->holder();
     ciInstanceKlass* sender_klass = calling_klass;
     if (sender_klass->is_interface()) {
@@ -629,6 +704,15 @@ void Parse::do_call() {
     set_stack(sp() - nargs, casted_receiver);
   }
 
+  // Scalarize value objects passed into this invocation if we know that they are not larval
+  for (int arg_idx = 0; arg_idx < nargs; arg_idx++) {
+    if (arg_can_be_larval(callee, arg_idx)) {
+      continue;
+    }
+
+    cast_to_non_larval(peek(nargs - 1 - arg_idx));
+  }
+
   // Note:  It's OK to try to inline a virtual call.
   // The call generator will not attempt to inline a polymorphic call
   // unless it knows how to optimize the receiver dispatch.
@@ -643,6 +727,10 @@ void Parse::do_call() {
   // This call checks with CHA, the interpreter profile, intrinsics table, etc.
   // It decides whether inlining is desirable or not.
   CallGenerator* cg = C->call_generator(callee, vtable_index, call_does_dispatch, jvms, try_inline, prof_factor(), speculative_receiver_type);
+  if (failing()) {
+    return;
+  }
+  assert(cg != nullptr, "must find a CallGenerator for callee %s", callee->name()->as_utf8());
 
   // NOTE:  Don't use orig_callee and callee after this point!  Use cg->method() instead.
   orig_callee = callee = nullptr;
@@ -729,7 +817,7 @@ void Parse::do_call() {
         BasicType rt = rtype->basic_type();
         BasicType ct = ctype->basic_type();
         if (ct == T_VOID) {
-          // It's OK for a method  to return a value that is discarded.
+          // It's OK for a method to return a value that is discarded.
           // The discarding does not require any special action from the caller.
           // The Java code knows this, at VerifyType.isNullConversion.
           pop_node(rt);  // whatever it was, pop it
@@ -786,6 +874,27 @@ void Parse::do_call() {
     BasicType ct = ctype->basic_type();
     if (is_reference_type(ct)) {
       record_profiled_return_for_speculation();
+    }
+
+    if (!rtype->is_void() && cg->method()->intrinsic_id() != vmIntrinsicID::_makePrivateBuffer) {
+      Node* retnode = peek();
+      const Type* rettype = gvn().type(retnode);
+      if (rettype->is_inlinetypeptr() && !retnode->is_InlineType()) {
+        retnode = InlineTypeNode::make_from_oop(this, retnode, rettype->inline_klass());
+        dec_sp(1);
+        push(retnode);
+      }
+    }
+
+    if (cg->method()->is_object_constructor() && receiver != nullptr && gvn().type(receiver)->is_inlinetypeptr()) {
+      InlineTypeNode* non_larval = InlineTypeNode::make_from_oop(this, receiver, gvn().type(receiver)->inline_klass());
+      // Relinquish the oop input, we will delay the allocation to the point it is needed, see the
+      // comments in InlineTypeNode::Ideal for more details
+      non_larval = non_larval->clone_if_required(&gvn(), nullptr);
+      non_larval->set_oop(gvn(), null());
+      non_larval->set_is_buffered(gvn(), false);
+      non_larval = gvn().transform(non_larval)->as_InlineType();
+      map()->replace_edge(receiver, non_larval);
     }
   }
 

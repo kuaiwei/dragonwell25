@@ -53,11 +53,13 @@
 #include "oops/constantPool.inline.hpp"
 #include "oops/cpCache.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
+#include "oops/flatArrayKlass.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.inline.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/refArrayOop.hpp"
 #include "oops/typeArrayOop.inline.hpp"
 #include "prims/jvmtiExport.hpp"
 #include "runtime/atomic.hpp"
@@ -191,7 +193,7 @@ oop ConstantPool::resolved_reference_at(int index) const {
 // Use a CAS for multithreaded access
 oop ConstantPool::set_resolved_reference_at(int index, oop new_result) {
   assert(oopDesc::is_oop_or_null(new_result), "Must be oop");
-  return resolved_references()->replace_if_null(index, new_result);
+  return refArrayOopDesc::cast(resolved_references())->replace_if_null(index, new_result);
 }
 
 // Create resolved_references array and mapping array for original cp indexes
@@ -262,7 +264,7 @@ void ConstantPool::initialize_unresolved_klasses(ClassLoaderData* loader_data, T
     case JVM_CONSTANT_Class:
     case JVM_CONSTANT_UnresolvedClass:
     case JVM_CONSTANT_UnresolvedClassInError:
-      // All of these should have been reverted back to ClassIndex before calling
+      // All of these should have been reverted back to Unresolved before calling
       // this function.
       ShouldNotReachHere();
 #endif
@@ -478,6 +480,7 @@ static const char* get_type(Klass* k) {
   if (src_k->is_objArray_klass()) {
     src_k = ObjArrayKlass::cast(src_k)->bottom_klass();
     assert(!src_k->is_objArray_klass(), "sanity");
+    assert(src_k->is_instance_klass() || src_k->is_typeArray_klass(), "Sanity check");
   }
 
   if (src_k->is_typeArray_klass()) {
@@ -619,6 +622,12 @@ void ConstantPool::trace_class_resolution(const constantPoolHandle& this_cp, Kla
   }
 }
 
+void check_is_inline_type(Klass* k, TRAPS) {
+  if (!k->is_inline_klass()) {
+    THROW(vmSymbols::java_lang_IncompatibleClassChangeError());
+  }
+}
+
 Klass* ConstantPool::klass_at_impl(const constantPoolHandle& this_cp, int cp_index,
                                    TRAPS) {
   JavaThread* javaThread = THREAD;
@@ -656,6 +665,7 @@ Klass* ConstantPool::klass_at_impl(const constantPoolHandle& this_cp, int cp_ind
   HandleMark hm(THREAD);
   Handle mirror_handle;
   Symbol* name = this_cp->symbol_at(name_index);
+  bool inline_type_signature = false;
   Handle loader (THREAD, this_cp->pool_holder()->class_loader());
 
   Klass* k;
@@ -664,12 +674,31 @@ Klass* ConstantPool::klass_at_impl(const constantPoolHandle& this_cp, int cp_ind
     JvmtiHideSingleStepping jhss(javaThread);
     k = SystemDictionary::resolve_or_fail(name, loader, true, THREAD);
   } //  JvmtiHideSingleStepping jhss(javaThread);
+  if (inline_type_signature) {
+    name->decrement_refcount();
+  }
 
   if (!HAS_PENDING_EXCEPTION) {
     // preserve the resolved klass from unloading
     mirror_handle = Handle(THREAD, k->java_mirror());
     // Do access check for klasses
     verify_constant_pool_resolve(this_cp, k, THREAD);
+  }
+
+  if (!HAS_PENDING_EXCEPTION && inline_type_signature) {
+    check_is_inline_type(k, THREAD);
+  }
+
+  if (!HAS_PENDING_EXCEPTION) {
+    Klass* bottom_klass = nullptr;
+    if (k->is_objArray_klass()) {
+      bottom_klass = ObjArrayKlass::cast(k)->bottom_klass();
+      assert(bottom_klass != nullptr, "Should be set");
+      assert(bottom_klass->is_instance_klass() || bottom_klass->is_typeArray_klass(), "Sanity check");
+    } else if (k->is_flatArray_klass()) {
+      bottom_klass = FlatArrayKlass::cast(k)->element_klass();
+      assert(bottom_klass != nullptr, "Should be set");
+    }
   }
 
   // Failed to resolve class. We must record the errors so that subsequent attempts

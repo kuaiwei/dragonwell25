@@ -28,7 +28,10 @@
 #include "cds/cppVtables.hpp"
 #include "cds/metaspaceShared.hpp"
 #include "logging/log.hpp"
+#include "oops/flatArrayKlass.hpp"
+#include "oops/inlineKlass.hpp"
 #include "oops/instanceClassLoaderKlass.hpp"
+#include "oops/instanceKlass.inline.hpp"
 #include "oops/instanceMirrorKlass.hpp"
 #include "oops/instanceRefKlass.hpp"
 #include "oops/instanceStackChunkKlass.hpp"
@@ -36,6 +39,7 @@
 #include "oops/methodData.hpp"
 #include "oops/trainingData.hpp"
 #include "oops/objArrayKlass.hpp"
+#include "oops/refArrayKlass.hpp"
 #include "oops/typeArrayKlass.hpp"
 #include "runtime/arguments.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -54,6 +58,7 @@
 //                  into our own tables.
 
 // Currently, the archive contains ONLY the following types of objects that have C++ vtables.
+// NOTE: this table must be in-sync with sun.jvm.hotspot.memory.FileMapInfo::populateMetadataTypeArray().
 #define CPP_VTABLE_TYPES_DO(f) \
   f(ConstantPool) \
   f(InstanceKlass) \
@@ -66,6 +71,9 @@
   f(MethodCounters) \
   f(ObjArrayKlass) \
   f(TypeArrayKlass) \
+  f(FlatArrayKlass) \
+  f(InlineKlass) \
+  f(RefArrayKlass) \
   f(KlassTrainingData) \
   f(MethodTrainingData) \
   f(CompileTrainingData)

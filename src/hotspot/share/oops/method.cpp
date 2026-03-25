@@ -60,6 +60,7 @@
 #include "oops/objArrayOop.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/symbol.hpp"
+#include "oops/inlineKlass.inline.hpp"
 #include "oops/trainingData.hpp"
 #include "prims/jvmtiExport.hpp"
 #include "prims/methodHandles.hpp"
@@ -121,7 +122,6 @@ Method::Method(ConstMethod* xconst, AccessFlags access_flags, Symbol* name) {
     clear_native_function();
     set_signature_handler(nullptr);
   }
-
   NOT_PRODUCT(set_compiled_invocation_count(0);)
   // Name is very useful for debugging.
   NOT_PRODUCT(_name = name;)
@@ -160,9 +160,19 @@ address Method::get_c2i_entry() {
   return adapter()->get_c2i_entry();
 }
 
+address Method::get_c2i_inline_entry() {
+  assert(adapter() != nullptr, "must have");
+  return adapter()->get_c2i_inline_entry();
+}
+
 address Method::get_c2i_unverified_entry() {
   assert(adapter() != nullptr, "must have");
   return adapter()->get_c2i_unverified_entry();
+}
+
+address Method::get_c2i_unverified_inline_entry() {
+  assert(adapter() != nullptr, "must have");
+  return adapter()->get_c2i_unverified_inline_entry();
 }
 
 address Method::get_c2i_no_clinit_check_entry() {
@@ -390,7 +400,7 @@ Symbol* Method::klass_name() const {
 void Method::metaspace_pointers_do(MetaspaceClosure* it) {
   log_trace(aot)("Iter(Method): %p", this);
 
-  if (!method_holder()->is_rewritten()) {
+  if (!method_holder()->is_rewritten() || CDSConfig::is_valhalla_preview()) {
     it->push(&_constMethod, MetaspaceClosure::_writable);
   } else {
     it->push(&_constMethod);
@@ -433,6 +443,8 @@ void Method::restore_unshareable_info(TRAPS) {
   if (_adapter != nullptr) {
     assert(_adapter->is_linked(), "must be");
     _from_compiled_entry = _adapter->get_c2i_entry();
+    _from_compiled_inline_entry = _adapter->get_c2i_inline_entry();
+    _from_compiled_inline_ro_entry = _adapter->get_c2i_inline_ro_entry();
   }
   assert(!queued_for_compilation(), "method's queued_for_compilation flag should not be set");
 }
@@ -722,6 +734,20 @@ int Method::extra_stack_words() {
   return extra_stack_entries() * Interpreter::stackElementSize;
 }
 
+// InlineKlass the method is declared to return. This must not
+// safepoint as it is called with references live on the stack at
+// locations the GC is unaware of.
+InlineKlass* Method::returns_inline_type() const {
+  assert(InlineTypeReturnedAsFields, "Inline types should never be returned as fields");
+  if (is_native()) {
+    return nullptr;
+  }
+  NoSafepointVerifier nsv;
+  SignatureStream ss(signature());
+  ss.skip_to_return_type();
+  return ss.as_inline_klass(method_holder());
+}
+
 bool Method::compute_has_loops_flag() {
   BytecodeStream bcs(methodHandle(Thread::current(), this));
   Bytecodes::Code bc;
@@ -870,6 +896,11 @@ bool Method::is_getter() const {
     default:
       return false;
   }
+  if (has_scalarized_return()) {
+    // Don't treat this as (trivial) getter method because the
+    // inline type should be returned in a scalarized form.
+    return false;
+  }
   return true;
 }
 
@@ -891,6 +922,11 @@ bool Method::is_setter() const {
   }
   if (java_code_at(2) != Bytecodes::_putfield) return false;
   if (java_code_at(5) != Bytecodes::_return)   return false;
+  if (has_scalarized_args()) {
+    // Don't treat this as (trivial) setter method because the
+    // inline type argument should be passed in a scalarized form.
+    return false;
+  }
   return true;
 }
 
@@ -901,24 +937,22 @@ bool Method::is_constant_getter() const {
   return (2 <= code_size() && code_size() <= 4 &&
           Bytecodes::is_const(java_code_at(0)) &&
           Bytecodes::length_for(java_code_at(0)) == last_index &&
-          Bytecodes::is_return(java_code_at(last_index)));
+          Bytecodes::is_return(java_code_at(last_index)) &&
+          !has_scalarized_args());
 }
 
-bool Method::has_valid_initializer_flags() const {
-  return (is_static() ||
-          method_holder()->major_version() < 51);
-}
-
-bool Method::is_static_initializer() const {
+bool Method::is_class_initializer() const {
   // For classfiles version 51 or greater, ensure that the clinit method is
   // static.  Non-static methods with the name "<clinit>" are not static
   // initializers. (older classfiles exempted for backward compatibility)
-  return name() == vmSymbols::class_initializer_name() &&
-         has_valid_initializer_flags();
+  return (name() == vmSymbols::class_initializer_name() &&
+          (is_static() ||
+           method_holder()->major_version() < 51));
 }
 
-bool Method::is_object_initializer() const {
-   return name() == vmSymbols::object_initializer_name();
+// A method named <init>, is a classic object constructor.
+bool Method::is_object_constructor() const {
+  return name() == vmSymbols::object_initializer_name();
 }
 
 bool Method::needs_clinit_barrier() const {
@@ -981,7 +1015,7 @@ int Method::line_number_from_bci(int bci) const {
 
 
 bool Method::is_klass_loaded_by_klass_index(int klass_index) const {
-  if( constants()->tag_at(klass_index).is_unresolved_klass() ) {
+  if( constants()->tag_at(klass_index).is_unresolved_klass()) {
     Thread *thread = Thread::current();
     Symbol* klass_name = constants()->klass_name_at(klass_index);
     Handle loader(thread, method_holder()->class_loader());
@@ -996,7 +1030,9 @@ bool Method::is_klass_loaded(int refinfo_index, Bytecodes::Code bc, bool must_be
   int klass_index = constants()->klass_ref_index_at(refinfo_index, bc);
   if (must_be_resolved) {
     // Make sure klass is resolved in constantpool.
-    if (constants()->tag_at(klass_index).is_unresolved_klass()) return false;
+    if (constants()->tag_at(klass_index).is_unresolved_klass()) {
+      return false;
+    }
   }
   return is_klass_loaded_by_klass_index(klass_index);
 }
@@ -1165,8 +1201,12 @@ void Method::clear_code() {
   // Only should happen at allocate time.
   if (adapter() == nullptr) {
     _from_compiled_entry    = nullptr;
+    _from_compiled_inline_entry = nullptr;
+    _from_compiled_inline_ro_entry = nullptr;
   } else {
     _from_compiled_entry    = adapter()->get_c2i_entry();
+    _from_compiled_inline_entry = adapter()->get_c2i_inline_entry();
+    _from_compiled_inline_ro_entry = adapter()->get_c2i_inline_ro_entry();
   }
   OrderAccess::storestore();
   _from_interpreted_entry = _i2i_entry;
@@ -1200,6 +1240,8 @@ void Method::unlink_method() {
   }
   _i2i_entry = nullptr;
   _from_compiled_entry = nullptr;
+  _from_compiled_inline_entry = nullptr;
+  _from_compiled_inline_ro_entry = nullptr;
   _from_interpreted_entry = nullptr;
 
   if (is_native()) {
@@ -1231,6 +1273,8 @@ void Method::remove_unshareable_flags() {
   set_is_not_c1_compilable(false);
   set_is_not_c2_osr_compilable(false);
   set_on_stack_flag(false);
+  set_has_scalarized_args(false);
+  set_has_scalarized_return(false);
 }
 #endif
 
@@ -1266,6 +1310,9 @@ void Method::link_method(const methodHandle& h_method, TRAPS) {
     set_native_function(
       SharedRuntime::native_method_throw_unsatisfied_link_error_entry(),
       !native_bind_event_is_interesting);
+  }
+  if (InlineTypeReturnedAsFields && returns_inline_type() && !has_scalarized_return()) {
+    set_has_scalarized_return();
   }
 
   // Setup compiler entrypoint.  This is made eagerly, so we do not need
@@ -1318,6 +1365,8 @@ address Method::make_adapters(const methodHandle& mh, TRAPS) {
 
   mh->set_adapter_entry(adapter);
   mh->_from_compiled_entry = adapter->get_c2i_entry();
+  mh->_from_compiled_inline_entry = adapter->get_c2i_inline_entry();
+  mh->_from_compiled_inline_ro_entry = adapter->get_c2i_inline_ro_entry();
   return adapter->get_c2i_entry();
 }
 
@@ -1332,6 +1381,18 @@ address Method::verified_code_entry() {
   DEBUG_ONLY(NoSafepointVerifier nsv;)
   assert(_from_compiled_entry != nullptr, "must be set");
   return _from_compiled_entry;
+}
+
+address Method::verified_inline_code_entry() {
+  DEBUG_ONLY(NoSafepointVerifier nsv;)
+  assert(_from_compiled_inline_entry != nullptr, "must be set");
+  return _from_compiled_inline_entry;
+}
+
+address Method::verified_inline_ro_code_entry() {
+  DEBUG_ONLY(NoSafepointVerifier nsv;)
+  assert(_from_compiled_inline_ro_entry != nullptr, "must be set");
+  return _from_compiled_inline_ro_entry;
 }
 
 // Check that if an nmethod ref exists, it has a backlink to this or no backlink at all
@@ -1365,6 +1426,8 @@ void Method::set_code(const methodHandle& mh, nmethod *code) {
 
   OrderAccess::storestore();
   mh->_from_compiled_entry = code->verified_entry_point();
+  mh->_from_compiled_inline_entry = code->verified_inline_entry_point();
+  mh->_from_compiled_inline_ro_entry = code->verified_inline_ro_entry_point();
   OrderAccess::storestore();
 
   if (mh->is_continuation_native_intrinsic()) {
@@ -1557,6 +1620,8 @@ methodHandle Method::make_method_handle_intrinsic(vmIntrinsics::ID iid,
 void Method::restore_archived_method_handle_intrinsic(methodHandle m, TRAPS) {
   if (m->adapter() != nullptr) {
     m->set_from_compiled_entry(m->adapter()->get_c2i_entry());
+    m->set_from_compiled_inline_entry(m->adapter()->get_c2i_inline_entry());
+    m->set_from_compiled_inline_ro_entry(m->adapter()->get_c2i_inline_ro_entry());
   }
   m->link_method(m, CHECK);
 
@@ -2323,6 +2388,31 @@ bool Method::is_valid_method(const Method* m) {
   }
 }
 
+bool Method::is_scalarized_arg(int idx) const {
+  if (!has_scalarized_args()) {
+    return false;
+  }
+  // Search through signature and check if argument is wrapped in T_METADATA/T_VOID
+  int depth = 0;
+  const GrowableArray<SigEntry>* sig = adapter()->get_sig_cc();
+  for (int i = 0; i < sig->length(); i++) {
+    BasicType bt = sig->at(i)._bt;
+    if (bt == T_METADATA) {
+      depth++;
+    }
+    if (idx == 0) {
+      break; // Argument found
+    }
+    if (bt == T_VOID && (sig->at(i-1)._bt != T_LONG && sig->at(i-1)._bt != T_DOUBLE)) {
+      depth--;
+    }
+    if (depth == 0 && bt != T_LONG && bt != T_DOUBLE) {
+      idx--; // Advance to next argument
+    }
+  }
+  return depth != 0;
+}
+
 #ifndef PRODUCT
 void Method::print_jmethod_ids_count(const ClassLoaderData* loader_data, outputStream* out) {
   out->print("%d", loader_data->jmethod_ids()->count_methods());
@@ -2355,6 +2445,10 @@ void Method::print_on(outputStream* st) const {
   if (highest_comp_level() != CompLevel_none)
     st->print_cr(" - highest level:     %d", highest_comp_level());
   st->print_cr(" - vtable index:      %d",   _vtable_index);
+#ifdef ASSERT
+  if (valid_itable_index())
+    st->print_cr(" - itable index:      %d",   itable_index());
+#endif
   st->print_cr(" - i2i entry:         " PTR_FORMAT, p2i(interpreter_entry()));
   st->print(   " - adapters:          ");
   AdapterHandlerEntry* a = ((Method*)this)->adapter();
@@ -2362,7 +2456,9 @@ void Method::print_on(outputStream* st) const {
     st->print_cr(PTR_FORMAT, p2i(a));
   else
     a->print_adapter_on(st);
-  st->print_cr(" - compiled entry     " PTR_FORMAT, p2i(from_compiled_entry()));
+  st->print_cr(" - compiled entry           " PTR_FORMAT, p2i(from_compiled_entry()));
+  st->print_cr(" - compiled inline entry    " PTR_FORMAT, p2i(from_compiled_inline_entry()));
+  st->print_cr(" - compiled inline ro entry " PTR_FORMAT, p2i(from_compiled_inline_ro_entry()));
   st->print_cr(" - code size:         %d",   code_size());
   if (code_size() != 0) {
     st->print_cr(" - code start:        " PTR_FORMAT, p2i(code_base()));
@@ -2432,6 +2528,7 @@ void Method::print_value_on(outputStream* st) const {
   st->print("%s", internal_name());
   print_address_on(st);
   st->print(" ");
+  if (WizardMode) access_flags().print_on(st);
   name()->print_value_on(st);
   st->print(" ");
   signature()->print_value_on(st);

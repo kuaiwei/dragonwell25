@@ -28,6 +28,7 @@
 #include "opto/graphKit.hpp"
 #include "opto/castnode.hpp"
 #include "opto/convertnode.hpp"
+#include "opto/inlinetypenode.hpp"
 #include "opto/intrinsicnode.hpp"
 #include "opto/movenode.hpp"
 
@@ -105,13 +106,21 @@ class LibraryCallKit : public GraphKit {
 
   void push_result() {
     // Push the result onto the stack.
-    if (!stopped() && result() != nullptr) {
-      if (result()->is_top()) {
+    Node* res = result();
+    if (!stopped() && res != nullptr) {
+      if (res->is_top()) {
         assert(false, "Can't determine return value.");
         C->record_method_not_compilable("Can't determine return value.");
       }
-      BasicType bt = result()->bottom_type()->basic_type();
-      push_node(bt, result());
+      BasicType bt = res->bottom_type()->basic_type();
+      if (C->inlining_incrementally() && res->is_InlineType()) {
+        // The caller expects an oop when incrementally inlining an intrinsic that returns an
+        // inline type. Make sure the call is re-executed if the allocation triggers a deoptimization.
+        PreserveReexecuteState preexecs(this);
+        jvms()->set_should_reexecute(true);
+        res = res->as_InlineType()->buffer(this);
+      }
+      push_node(bt, res);
     }
   }
 
@@ -142,7 +151,6 @@ class LibraryCallKit : public GraphKit {
                               bool is_immutable);
   Node* generate_current_thread(Node* &tls_output);
   Node* generate_virtual_thread(Node* threadObj);
-  Node* load_mirror_from_klass(Node* klass);
   Node* load_klass_from_mirror_common(Node* mirror, bool never_see_null,
                                       RegionNode* region, int null_path,
                                       int offset);
@@ -160,27 +168,41 @@ class LibraryCallKit : public GraphKit {
                                          region, null_path,
                                          offset);
   }
+  Node* load_default_array_klass(Node* klass_node);
+
   Node* generate_klass_flags_guard(Node* kls, int modifier_mask, int modifier_bits, RegionNode* region,
                                    ByteSize offset, const Type* type, BasicType bt);
   Node* generate_misc_flags_guard(Node* kls,
                                   int modifier_mask, int modifier_bits,
                                   RegionNode* region);
   Node* generate_interface_guard(Node* kls, RegionNode* region);
+
+  enum ArrayKind {
+    AnyArray,
+    NonArray,
+    RefArray,
+    NonRefArray,
+    TypeArray
+  };
+
   Node* generate_hidden_class_guard(Node* kls, RegionNode* region);
+
   Node* generate_array_guard(Node* kls, RegionNode* region, Node** obj = nullptr) {
-    return generate_array_guard_common(kls, region, false, false, obj);
+    return generate_array_guard_common(kls, region, AnyArray, obj);
   }
   Node* generate_non_array_guard(Node* kls, RegionNode* region, Node** obj = nullptr) {
-    return generate_array_guard_common(kls, region, false, true, obj);
+    return generate_array_guard_common(kls, region, NonArray, obj);
   }
-  Node* generate_objArray_guard(Node* kls, RegionNode* region, Node** obj = nullptr) {
-    return generate_array_guard_common(kls, region, true, false, obj);
+  Node* generate_refArray_guard(Node* kls, RegionNode* region, Node** obj = nullptr) {
+    return generate_array_guard_common(kls, region, RefArray, obj);
   }
-  Node* generate_non_objArray_guard(Node* kls, RegionNode* region, Node** obj = nullptr) {
-    return generate_array_guard_common(kls, region, true, true, obj);
+  Node* generate_non_refArray_guard(Node* kls, RegionNode* region, Node** obj = nullptr) {
+    return generate_array_guard_common(kls, region, NonRefArray, obj);
   }
-  Node* generate_array_guard_common(Node* kls, RegionNode* region,
-                                    bool obj_array, bool not_array, Node** obj = nullptr);
+  Node* generate_typeArray_guard(Node* kls, RegionNode* region, Node** obj = nullptr) {
+    return generate_array_guard_common(kls, region, TypeArray, obj);
+  }
+  Node* generate_array_guard_common(Node* kls, RegionNode* region, ArrayKind kind, Node** obj = nullptr);
   Node* generate_virtual_guard(Node* obj_klass, RegionNode* slow_region);
   CallJavaNode* generate_method_call(vmIntrinsicID method_id, bool is_virtual, bool is_static, bool res_not_null);
   CallJavaNode* generate_method_call_static(vmIntrinsicID method_id, bool res_not_null) {
@@ -228,13 +250,17 @@ class LibraryCallKit : public GraphKit {
 
   typedef enum { Relaxed, Opaque, Volatile, Acquire, Release } AccessKind;
   DecoratorSet mo_decorator_for_access_kind(AccessKind kind);
-  bool inline_unsafe_access(bool is_store, BasicType type, AccessKind kind, bool is_unaligned);
+  bool inline_unsafe_access(bool is_store, BasicType type, AccessKind kind, bool is_unaligned, bool is_flat = false);
+  bool inline_unsafe_flat_access(bool is_store, AccessKind kind);
   static bool klass_needs_init_guard(Node* kls);
   bool inline_unsafe_allocate();
   bool inline_unsafe_newArray(bool uninitialized);
+  bool inline_newArray(bool null_free, bool atomic);
   bool inline_unsafe_writeback0();
   bool inline_unsafe_writebackSync0(bool is_pre);
   bool inline_unsafe_copyMemory();
+  bool inline_unsafe_make_private_buffer();
+  bool inline_unsafe_finish_private_buffer();
   bool inline_unsafe_setMemory();
 
   bool inline_native_currentCarrierThread();
@@ -261,6 +287,7 @@ class LibraryCallKit : public GraphKit {
   void extend_setCurrentThread(Node* jt, Node* thread);
 #endif
   bool inline_native_Class_query(vmIntrinsics::ID id);
+  bool inline_primitive_Class_conversion(vmIntrinsics::ID id);
   bool inline_native_subtype_check();
   bool inline_native_getLength();
   bool inline_array_copyOf(bool is_copyOfRange);

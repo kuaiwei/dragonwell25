@@ -55,7 +55,16 @@ public:
   // What kind of vmObject is this?
   bool is_array_klass() const { return true; }
 
-  static ciArrayKlass* make(ciType* element_type);
+  // The one-level type of the array elements.
+  virtual ciKlass* element_klass() { return nullptr; }
+
+  static ciArrayKlass* make(ciType* klass, bool null_free = false, bool atomic = false, bool vm_type = false);
+
+  int array_header_in_bytes();
+  ciInstance* component_mirror_instance() const;
+
+  bool is_elem_null_free() const;
+  bool is_elem_atomic();
 };
 
 #endif // SHARE_CI_CIARRAYKLASS_HPP

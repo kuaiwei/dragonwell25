@@ -535,6 +535,11 @@ java/lang/invoke/LFCaching/LFGarbageCollectedTest.java          8078602 generic-
 java/lang/invoke/lambda/LambdaFileEncodingSerialization.java    8249079 linux-all
 java/lang/invoke/RicochetTest.java                              8251969 generic-all
 
+java/lang/ModuleLayer/LayerControllerTest.java                  8337048 generic-all
+java/lang/ModuleLayer/BasicLayerTest.java                       8337048 generic-all
+
+java/lang/Thread/virtual/stress/Skynet.java#default             8342977 generic-all
+
 ############################################################################
 
 # jdk_instrument
@@ -552,6 +557,7 @@ java/io/IO/IO.java                                              8337935 linux-pp
 ############################################################################
 
 # jdk_management
+com/sun/management/HotSpotDiagnosticMXBean/DumpThreadsWithEliminatedLock.java 8360599 generic-all
 
 com/sun/management/OperatingSystemMXBean/GetProcessCpuLoad.java 8030957 aix-all
 com/sun/management/OperatingSystemMXBean/GetSystemCpuLoad.java  8030957 aix-all
@@ -576,6 +582,8 @@ javax/management/remote/mandatory/connection/BrokenConnectionTest.java 8262312 l
 ############################################################################
 
 # jdk_net
+
+java/net/CookieHandler/B6644726.java                            8365811 generic-all
 
 java/net/DatagramSocket/DatagramSocketExample.java              8308807 aix-ppc64
 java/net/DatagramSocket/DatagramSocketMulticasting.java         8308807 aix-ppc64
@@ -732,6 +740,10 @@ com/sun/jdi/RepStep.java                                        8043571 generic-
 
 com/sun/jdi/InvokeHangTest.java                                 8218463 linux-all
 
+com/sun/jdi/cds/CDSBreakpointTest.java                          8304168 generic-all
+com/sun/jdi/cds/CDSDeleteAllBkptsTest.java                      8304168 generic-all
+com/sun/jdi/cds/CDSFieldWatchpoints.java                        8304168 generic-all
+
 ############################################################################
 
 # jdk_time
@@ -837,3 +849,8 @@ java/awt/Cursor/CursorDragTest/ListDragCursor.java 7177297 macosx-all
 # Mechanically added:
 javax/sound/midi/Soundbanks/ExtraCharInSoundbank.java 8350613 linux-aarch64,linux-x64
 java/net/CookieHandler/B6644726.java 8366103 linux-aarch64,linux-x64,macosx-aarch64,windows-x64
+
+# valhalla
+jdk/classfile/AccessFlagsTest.java 8366270 generic-all
+jdk/jfr/event/runtime/TestSyncOnValueBasedClassEvent.java 8328777 generic-all
+jdk/jfr/event/runtime/TestClassLoaderStatsEvent.java 8366820 generic-all

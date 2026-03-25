@@ -32,7 +32,7 @@
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/macros.hpp"
 
-// These fascilities are used for allocating, and initializing newly allocated objects.
+// These facilities are used for allocating, and initializing newly allocated objects.
 
 class MemAllocator: StackObj {
 protected:
@@ -88,6 +88,14 @@ public:
 
   virtual oop initialize(HeapWord* mem) const;
 };
+
+class ObjBufferAllocator: public MemAllocator {
+public:
+  ObjBufferAllocator(Klass* klass, size_t word_size, Thread* thread = Thread::current())
+    : MemAllocator(klass, word_size, thread) {}
+  virtual oop initialize(HeapWord* mem) const;
+};
+
 
 class ObjArrayAllocator: public MemAllocator {
 protected:

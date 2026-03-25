@@ -75,6 +75,7 @@
 #endif
 
 #include <limits>
+#include <string.h>
 
 static const char _default_java_launcher[] = "generic";
 
@@ -355,6 +356,18 @@ bool Arguments::internal_module_property_helper(const char* property, bool check
           matches_property_suffix(property_suffix, PATH, PATH_LEN) ||
           matches_property_suffix(property_suffix, ADDMODS, ADDMODS_LEN) ||
           matches_property_suffix(property_suffix, ENABLE_NATIVE_ACCESS, ENABLE_NATIVE_ACCESS_LEN)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool Arguments::patching_migrated_classes(const char* property, const char* value) {
+  if (strncmp(property, MODULE_PROPERTY_PREFIX, MODULE_PROPERTY_PREFIX_LEN) == 0) {
+    const char* property_suffix = property + MODULE_PROPERTY_PREFIX_LEN;
+    if (matches_property_suffix(property_suffix, PATCH, PATCH_LEN)) {
+      if (strcmp(value, "java.base-valueclasses.jar")) {
         return true;
       }
     }
@@ -1784,14 +1797,13 @@ bool Arguments::executing_unit_tests() {
 static unsigned int addreads_count = 0;
 static unsigned int addexports_count = 0;
 static unsigned int addopens_count = 0;
-static unsigned int patch_mod_count = 0;
 static unsigned int enable_native_access_count = 0;
 static bool patch_mod_javabase = false;
 
 // Check the consistency of vm_init_args
 bool Arguments::check_vm_args_consistency() {
   // This may modify compiler flags. Must be called before CompilerConfig::check_args_consistency()
-  if (!CDSConfig::check_vm_args_consistency(patch_mod_javabase, mode_flag_cmd_line)) {
+  if (!CDSConfig::check_vm_args_consistency(mode_flag_cmd_line)) {
     return false;
   }
 
@@ -2067,14 +2079,75 @@ int Arguments::process_patch_mod_option(const char* patch_mod_tail) {
       memcpy(module_name, patch_mod_tail, module_len);
       *(module_name + module_len) = '\0';
       // The path piece begins one past the module_equal sign
-      add_patch_mod_prefix(module_name, module_equal + 1);
+      add_patch_mod_prefix(module_name, module_equal + 1, false /* no append */, false /* no cds */);
       FREE_C_HEAP_ARRAY(char, module_name);
-      if (!create_numbered_module_property("jdk.module.patch", patch_mod_tail, patch_mod_count++)) {
-        return JNI_ENOMEM;
-      }
     } else {
       return JNI_ENOMEM;
     }
+  }
+  return JNI_OK;
+}
+
+// VALUECLASS_STR must match string used in the build
+#define VALUECLASS_STR "valueclasses"
+#define VALUECLASS_JAR "-" VALUECLASS_STR ".jar"
+
+// Finalize --patch-module args and --enable-preview related to value class module patches.
+// Create all numbered properties passing module patches.
+int Arguments::finalize_patch_module() {
+  // If --enable-preview and EnableValhalla is true, each module may have value classes that
+  // are to be patched into the module.
+  // For each <module>-valueclasses.jar in <JAVA_HOME>/lib/valueclasses/
+  // appends the equivalent of --patch-module <module>=<JAVA_HOME>/lib/valueclasses/<module>-valueclasses.jar
+  if (enable_preview() && EnableValhalla) {
+    char * valueclasses_dir = AllocateHeap(JVM_MAXPATHLEN, mtArguments);
+    const char * fileSep = os::file_separator();
+
+    jio_snprintf(valueclasses_dir, JVM_MAXPATHLEN, "%s%slib%s" VALUECLASS_STR "%s",
+                 Arguments::get_java_home(), fileSep, fileSep, fileSep);
+    DIR* dir = os::opendir(valueclasses_dir);
+    if (dir != nullptr) {
+      char * module_name = AllocateHeap(JVM_MAXPATHLEN, mtArguments);
+      char * path = AllocateHeap(JVM_MAXPATHLEN, mtArguments);
+
+      for (dirent * entry = os::readdir(dir); entry != nullptr; entry = os::readdir(dir)) {
+        // Test if file ends-with "-valueclasses.jar"
+        int len = (int)strlen(entry->d_name) - (sizeof(VALUECLASS_JAR) - 1);
+        if (len <= 0 || strcmp(&entry->d_name[len], VALUECLASS_JAR) != 0) {
+          continue;         // too short or not the expected suffix
+        }
+
+        strcpy(module_name, entry->d_name);
+        module_name[len] = '\0';     // truncate to just module-name
+
+        jio_snprintf(path, JVM_MAXPATHLEN, "%s%s", valueclasses_dir, &entry->d_name);
+        add_patch_mod_prefix(module_name, path, true /* append */, true /* cds OK*/);
+        log_info(class)("--enable-preview appending value classes for module %s: %s", module_name, entry->d_name);
+      }
+      FreeHeap(module_name);
+      FreeHeap(path);
+      os::closedir(dir);
+    }
+    FreeHeap(valueclasses_dir);
+  }
+
+  // Create numbered properties for each module that has been patched either
+  // by --patch-module or --enable-preview
+  // Format is "jdk.module.patch.<n>=<module_name>=<path>"
+  if (_patch_mod_prefix != nullptr) {
+    char * prop_value = AllocateHeap(JVM_MAXPATHLEN + JVM_MAXPATHLEN + 1, mtArguments);
+    unsigned int patch_mod_count = 0;
+
+    for (GrowableArrayIterator<ModulePatchPath *> it = _patch_mod_prefix->begin();
+            it != _patch_mod_prefix->end(); ++it) {
+      jio_snprintf(prop_value, JVM_MAXPATHLEN + JVM_MAXPATHLEN + 1, "%s=%s",
+                   (*it)->module_name(), (*it)->path_string());
+      if (!create_numbered_module_property("jdk.module.patch", prop_value, patch_mod_count++)) {
+        FreeHeap(prop_value);
+        return JNI_ENOMEM;
+      }
+    }
+    FreeHeap(prop_value);
   }
   return JNI_OK;
 }
@@ -2347,6 +2420,10 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args, JVMFlagOrigin
     // --enable_preview
     } else if (match_option(option, "--enable-preview")) {
       set_enable_preview();
+      // --enable-preview enables Valhalla, EnableValhalla VM option will eventually be removed before integration
+      if (FLAG_SET_CMDLINE(EnableValhalla, true) != JVMFlag::SUCCESS) {
+        return JNI_EINVAL;
+      }
     // -Xnoclassgc
     } else if (match_option(option, "-Xnoclassgc")) {
       if (FLAG_SET_CMDLINE(ClassUnloading, false) != JVMFlag::SUCCESS) {
@@ -2826,16 +2903,11 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args, JVMFlagOrigin
   return JNI_OK;
 }
 
-void Arguments::add_patch_mod_prefix(const char* module_name, const char* path) {
-  // For java.base check for duplicate --patch-module options being specified on the command line.
-  // This check is only required for java.base, all other duplicate module specifications
-  // will be checked during module system initialization.  The module system initialization
-  // will throw an ExceptionInInitializerError if this situation occurs.
-  if (strcmp(module_name, JAVA_BASE_NAME) == 0) {
-    if (patch_mod_javabase) {
-      vm_exit_during_initialization("Cannot specify " JAVA_BASE_NAME " more than once to --patch-module");
-    } else {
-      patch_mod_javabase = true;
+void Arguments::add_patch_mod_prefix(const char* module_name, const char* path, bool allow_append, bool allow_cds) {
+  if (!allow_cds) {
+    CDSConfig::set_module_patching_disables_cds();
+    if (strcmp(module_name, JAVA_BASE_NAME) == 0) {
+      CDSConfig::set_java_base_module_patching_disables_cds();
     }
   }
 
@@ -2844,7 +2916,24 @@ void Arguments::add_patch_mod_prefix(const char* module_name, const char* path) 
     _patch_mod_prefix = new (mtArguments) GrowableArray<ModulePatchPath*>(10, mtArguments);
   }
 
-  _patch_mod_prefix->push(new ModulePatchPath(module_name, path));
+  // Scan patches for matching module
+  int i = _patch_mod_prefix->find_if([&](ModulePatchPath* patch) {
+    return (strcmp(module_name, patch->module_name()) == 0);
+  });
+  if (i == -1) {
+    _patch_mod_prefix->push(new ModulePatchPath(module_name, path));
+  } else {
+    if (allow_append) {
+      // append path to existing module entry
+      _patch_mod_prefix->at(i)->append_path(path);
+    } else {
+      if (strcmp(module_name, JAVA_BASE_NAME) == 0) {
+        vm_exit_during_initialization("Cannot specify " JAVA_BASE_NAME " more than once to --patch-module");
+      } else {
+        vm_exit_during_initialization("Cannot specify a module more than once to --patch-module", module_name);
+      }
+    }
+  }
 }
 
 // Remove all empty paths from the app classpath (if IgnoreEmptyClassPaths is enabled)
@@ -2957,10 +3046,14 @@ jint Arguments::finalize_vm_init_args() {
     return JNI_ERR;
   }
 
-  if (!check_vm_args_consistency()) {
+  // finalize --module-patch and related --enable-preview
+  if (finalize_patch_module() != JNI_OK) {
     return JNI_ERR;
   }
 
+  if (!check_vm_args_consistency()) {
+    return JNI_ERR;
+  }
 
 #ifndef CAN_SHOW_REGISTERS_ON_ASSERT
   UNSUPPORTED_OPTION(ShowRegistersOnAssert);
@@ -3848,6 +3941,18 @@ jint Arguments::apply_ergo() {
   if (BytecodeVerificationLocal && !BytecodeVerificationRemote) {
     log_info(verification)("Turning on remote verification because local verification is on");
     FLAG_SET_DEFAULT(BytecodeVerificationRemote, true);
+  }
+  if (!EnableValhalla || (is_interpreter_only() && !CDSConfig::is_dumping_archive() && !UseSharedSpaces)) {
+    // Disable calling convention optimizations if inline types are not supported.
+    // Also these aren't useful in -Xint. However, don't disable them when dumping or using
+    // the CDS archive, as the values must match between dumptime and runtime.
+    FLAG_SET_DEFAULT(InlineTypePassFieldsAsArgs, false);
+    FLAG_SET_DEFAULT(InlineTypeReturnedAsFields, false);
+  }
+  if (!UseNonAtomicValueFlattening && !UseNullableValueFlattening && !UseAtomicValueFlattening) {
+    // Flattening is disabled
+    FLAG_SET_DEFAULT(UseArrayFlattening, false);
+    FLAG_SET_DEFAULT(UseFieldFlattening, false);
   }
 
 #ifndef PRODUCT

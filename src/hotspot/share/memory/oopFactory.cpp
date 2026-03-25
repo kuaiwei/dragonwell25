@@ -29,9 +29,14 @@
 #include "memory/oopFactory.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
+#include "oops/arrayKlass.hpp"
+#include "oops/flatArrayKlass.hpp"
+#include "oops/flatArrayOop.inline.hpp"
+#include "oops/flatArrayOop.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/instanceOop.hpp"
 #include "oops/objArrayKlass.hpp"
+#include "oops/objArrayOop.inline.hpp"
 #include "oops/objArrayOop.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/typeArrayKlass.hpp"
@@ -74,7 +79,7 @@ typeArrayOop oopFactory::new_longArray(int length, TRAPS) {
 // create java.lang.Object[]
 objArrayOop oopFactory::new_objectArray(int length, TRAPS)  {
   assert(Universe::objectArrayKlass() != nullptr, "Too early?");
-  return Universe::objectArrayKlass()->allocate(length, THREAD);
+  return Universe::objectArrayKlass()->allocate_instance(length, ArrayKlass::ArrayProperties::DEFAULT, THREAD);
 }
 
 typeArrayOop oopFactory::new_charArray(const char* utf8_str, TRAPS) {
@@ -105,13 +110,34 @@ typeArrayOop oopFactory::new_typeArray_nozero(BasicType type, int length, TRAPS)
   return klass->allocate_common(length, false, THREAD);
 }
 
-
-objArrayOop oopFactory::new_objArray(Klass* klass, int length, TRAPS) {
+objArrayOop oopFactory::new_objArray(Klass* klass, int length, ArrayKlass::ArrayProperties properties, TRAPS) {
+  assert(klass->is_klass(), "must be instance class");
   if (klass->is_array_klass()) {
+    assert(properties == ArrayKlass::ArrayProperties::DEFAULT, "properties only apply to single dimension arrays");
     return ArrayKlass::cast(klass)->allocate_arrayArray(1, length, THREAD);
   } else {
-    return InstanceKlass::cast(klass)->allocate_objArray(1, length, THREAD);
+    return InstanceKlass::cast(klass)->allocate_objArray(length, properties, THREAD);
   }
+}
+
+objArrayOop oopFactory::new_objArray(Klass* klass, int length, TRAPS) {
+  return  new_objArray(klass, length, ArrayKlass::ArrayProperties::DEFAULT, THREAD);
+}
+
+flatArrayOop oopFactory::new_flatArray(Klass* k, int length, ArrayKlass::ArrayProperties props, LayoutKind lk, TRAPS) {
+  InlineKlass* klass = InlineKlass::cast(k);
+
+  ArrayKlass* array_type = klass->array_klass(CHECK_NULL);
+  ObjArrayKlass* oak = ObjArrayKlass::cast(array_type)->klass_with_properties(props, CHECK_NULL);
+
+  assert(oak->is_flatArray_klass(), "Expected to be");
+  assert(FlatArrayKlass::cast(oak)->layout_kind() == lk, "Unexpected layout kind");
+
+  flatArrayOop oop = (flatArrayOop)FlatArrayKlass::cast(oak)->allocate_instance(length, props, CHECK_NULL);
+  assert(oop == nullptr || oop->is_flatArray(), "sanity");
+  assert(oop == nullptr || oop->klass()->is_flatArray_klass(), "sanity");
+
+  return oop;
 }
 
 objArrayHandle oopFactory::new_objArray_handle(Klass* klass, int length, TRAPS) {

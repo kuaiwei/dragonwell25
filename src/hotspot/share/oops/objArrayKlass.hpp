@@ -42,20 +42,31 @@ class ObjArrayKlass : public ArrayKlass {
  private:
   // If you add a new field that points to any metaspace object, you
   // must add this field to ObjArrayKlass::metaspace_pointers_do().
-  Klass* _element_klass;            // The klass of the elements of this array type
   Klass* _bottom_klass;             // The one-dimensional type (InstanceKlass or TypeArrayKlass)
+ protected:
+  Klass* _element_klass;            // The klass of the elements of this array type
+  ObjArrayKlass* _next_refined_array_klass;
 
+ protected:
   // Constructor
-  ObjArrayKlass(int n, Klass* element_klass, Symbol* name);
-  static ObjArrayKlass* allocate(ClassLoaderData* loader_data, int n, Klass* k, Symbol* name, TRAPS);
+  ObjArrayKlass(int n, Klass* element_klass, Symbol* name, KlassKind kind, ArrayKlass::ArrayProperties props, markWord mw);
+  static ObjArrayKlass* allocate_klass(ClassLoaderData* loader_data, int n, Klass* k, Symbol* name, ArrayKlass::ArrayProperties props, TRAPS);
  public:
   // For dummy objects
   ObjArrayKlass() {}
 
-  // Instance variables
-  Klass* element_klass() const      { return _element_klass; }
-  void set_element_klass(Klass* k)  { _element_klass = k; }
-  Klass** element_klass_addr()      { return &_element_klass; }
+  // Compiler/Interpreter offset
+  static ByteSize element_klass_offset() { return in_ByteSize(offset_of(ObjArrayKlass, _element_klass)); }
+
+  virtual Klass* element_klass() const      { return _element_klass; }
+  virtual void set_element_klass(Klass* k)  { _element_klass = k; }
+
+  ObjArrayKlass* next_refined_array_klass() const      { return _next_refined_array_klass; }
+  inline ObjArrayKlass* next_refined_array_klass_acquire() const;
+  void set_next_refined_klass_klass(ObjArrayKlass* ak) { _next_refined_array_klass = ak; }
+  inline void release_set_next_refined_klass(ObjArrayKlass* ak);
+  ObjArrayKlass* klass_with_properties(ArrayKlass::ArrayProperties properties, TRAPS);
+  static ByteSize next_refined_array_klass_offset() { return byte_offset_of(ObjArrayKlass, _next_refined_array_klass); }
 
   Klass* bottom_klass() const       { return _bottom_klass; }
   void set_bottom_klass(Klass* k)   { _bottom_klass = k; }
@@ -63,9 +74,6 @@ class ObjArrayKlass : public ArrayKlass {
 
   ModuleEntry* module() const;
   PackageEntry* package() const;
-
-  // Compiler/Interpreter offset
-  static ByteSize element_klass_offset() { return byte_offset_of(ObjArrayKlass, _element_klass); }
 
   // Dispatched operation
   bool can_be_primary_super_slow() const;
@@ -78,7 +86,9 @@ class ObjArrayKlass : public ArrayKlass {
   static ObjArrayKlass* allocate_objArray_klass(ClassLoaderData* loader_data,
                                                 int n, Klass* element_klass, TRAPS);
 
-  objArrayOop allocate(int length, TRAPS);
+  static ArrayDescription array_layout_selection(Klass* element, ArrayProperties properties);
+
+  virtual objArrayOop allocate_instance(int length, ArrayProperties props, TRAPS);
   oop multi_allocate(int rank, jint* sizes, TRAPS);
 
   // Copying
@@ -88,13 +98,10 @@ class ObjArrayKlass : public ArrayKlass {
   oop protection_domain() const { return bottom_klass()->protection_domain(); }
 
   virtual void metaspace_pointers_do(MetaspaceClosure* iter);
+  virtual void remove_unshareable_info();
+  virtual void remove_java_mirror();
+  void restore_unshareable_info(ClassLoaderData* loader_data, Handle protection_domain, TRAPS);
 
- private:
-  // Either oop or narrowOop depending on UseCompressedOops.
-  // must be called from within ObjArrayKlass.cpp
-  void do_copy(arrayOop s, size_t src_offset,
-               arrayOop d, size_t dst_offset,
-               int length, TRAPS);
  public:
   static ObjArrayKlass* cast(Klass* k) {
     return const_cast<ObjArrayKlass*>(cast(const_cast<const Klass*>(k)));
@@ -150,9 +157,9 @@ class ObjArrayKlass : public ArrayKlass {
   void print_on(outputStream* st) const;
   void print_value_on(outputStream* st) const;
 
-  void oop_print_value_on(oop obj, outputStream* st);
+  virtual void oop_print_value_on(oop obj, outputStream* st);
 #ifndef PRODUCT
-  void oop_print_on      (oop obj, outputStream* st);
+  virtual void oop_print_on      (oop obj, outputStream* st);
 #endif //PRODUCT
 
   const char* internal_name() const;

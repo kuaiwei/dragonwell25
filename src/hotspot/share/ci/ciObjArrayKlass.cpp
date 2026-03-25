@@ -26,6 +26,7 @@
 #include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciSymbol.hpp"
 #include "ci/ciUtilities.inline.hpp"
+#include "oops/inlineKlass.inline.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "runtime/signature.hpp"
 
@@ -63,14 +64,15 @@ ciObjArrayKlass::ciObjArrayKlass(ciSymbol* array_name,
                                  int dimension)
   : ciArrayKlass(array_name,
                  dimension, T_OBJECT) {
-    _base_element_klass = base_element_klass;
-    assert(_base_element_klass->is_instance_klass() ||
-           _base_element_klass->is_type_array_klass(), "bad base klass");
-    if (dimension == 1) {
-      _element_klass = base_element_klass;
-    } else {
-      _element_klass = nullptr;
-    }
+  _base_element_klass = base_element_klass;
+  assert(_base_element_klass->is_instance_klass() ||
+         _base_element_klass->is_type_array_klass() ||
+         _base_element_klass->is_flat_array_klass(), "bad base klass");
+  if (dimension == 1) {
+    _element_klass = base_element_klass;
+  } else {
+    _element_klass = nullptr;
+  }
 }
 
 // ------------------------------------------------------------------
@@ -115,7 +117,6 @@ ciSymbol* ciObjArrayKlass::construct_array_name(ciSymbol* element_name,
     name[pos] = JVM_SIGNATURE_ARRAY;
   }
   Symbol* base_name_sym = element_name->get_symbol();
-
   if (Signature::is_array(base_name_sym) ||
       Signature::has_envelope(base_name_sym)) {
     strncpy(&name[pos], (char*)element_name->base(), element_len);
@@ -133,12 +134,15 @@ ciSymbol* ciObjArrayKlass::construct_array_name(ciSymbol* element_name,
 // ciObjArrayKlass::make_impl
 //
 // Implementation of make.
-ciObjArrayKlass* ciObjArrayKlass::make_impl(ciKlass* element_klass) {
-
+ciObjArrayKlass* ciObjArrayKlass::make_impl(ciKlass* element_klass, bool vm_type) {
   if (element_klass->is_loaded()) {
     EXCEPTION_CONTEXT;
     // The element klass is loaded
     Klass* array = element_klass->get_Klass()->array_klass(THREAD);
+    if (array->is_objArray_klass() && vm_type) {
+      assert(!array->is_refArray_klass() && !array->is_flatArray_klass(), "Unexpected refined klass");
+      array = ObjArrayKlass::cast(array)->klass_with_properties(ArrayKlass::ArrayProperties::DEFAULT, THREAD);
+    }
     if (HAS_PENDING_EXCEPTION) {
       CLEAR_PENDING_EXCEPTION;
       CURRENT_THREAD_ENV->record_out_of_memory_failure();
@@ -147,8 +151,7 @@ ciObjArrayKlass* ciObjArrayKlass::make_impl(ciKlass* element_klass) {
     return CURRENT_THREAD_ENV->get_obj_array_klass(array);
   }
 
-  // The array klass was unable to be made or the element klass was
-  // not loaded.
+  // The array klass was unable to be made or the element klass was not loaded.
   ciSymbol* array_name = construct_array_name(element_klass->name(), 1);
   if (array_name == ciEnv::unloaded_cisymbol()) {
     return ciEnv::unloaded_ciobjarrayklass();
@@ -162,8 +165,8 @@ ciObjArrayKlass* ciObjArrayKlass::make_impl(ciKlass* element_klass) {
 // ciObjArrayKlass::make
 //
 // Make an array klass corresponding to the specified primitive type.
-ciObjArrayKlass* ciObjArrayKlass::make(ciKlass* element_klass) {
-  GUARDED_VM_ENTRY(return make_impl(element_klass);)
+ciObjArrayKlass* ciObjArrayKlass::make(ciKlass* element_klass, bool vm_type) {
+  GUARDED_VM_ENTRY(return make_impl(element_klass, vm_type);)
 }
 
 ciObjArrayKlass* ciObjArrayKlass::make(ciKlass* element_klass, int dims) {
@@ -175,9 +178,17 @@ ciObjArrayKlass* ciObjArrayKlass::make(ciKlass* element_klass, int dims) {
 }
 
 ciKlass* ciObjArrayKlass::exact_klass() {
+  if (!is_loaded()) {
+    return nullptr;
+  }
   ciType* base = base_element_type();
   if (base->is_instance_klass()) {
     ciInstanceKlass* ik = base->as_instance_klass();
+    // Even though MyValue is final, [LMyValue is only exact if the array
+    // is null-free due to null-free [LMyValue <: null-able [LMyValue.
+    if (ik->is_inlinetype() && !is_elem_null_free()) {
+      return nullptr;
+    }
     if (ik->exact_klass() != nullptr) {
       return this;
     }

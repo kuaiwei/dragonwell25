@@ -68,6 +68,7 @@ class BootstrapInfo;
 class ClassFileStream;
 class ClassLoadInfo;
 class Dictionary;
+class AllFieldStream;
 class PackageEntry;
 class GCTimer;
 class EventClassLoad;
@@ -112,7 +113,8 @@ class SystemDictionary : AllStatic {
   // Resolve a superclass or superinterface. Called from ClassFileParser,
   // parse_interfaces, resolve_instance_class_or_null, load_shared_class
   // "class_name" is the class whose super class or interface is being resolved.
-  static InstanceKlass* resolve_super_or_fail(Symbol* class_name, Symbol* super_name,
+  static InstanceKlass* resolve_with_circularity_detection_or_fail(Symbol* class_name,
+                                              Symbol* super_name,
                                               Handle class_loader,
                                               bool is_superclass, TRAPS) {
     return resolve_with_circularity_detection(class_name, super_name, class_loader, is_superclass, THREAD);
@@ -139,6 +141,7 @@ class SystemDictionary : AllStatic {
   static oop get_platform_class_loader_impl(TRAPS);
 
  public:
+
   // Resolve either a hidden or normal class from a stream of bytes, based on ClassLoadInfo
   static InstanceKlass* resolve_from_stream(ClassFileStream* st,
                                             Symbol* class_name,
@@ -284,7 +287,7 @@ public:
   static const char* find_nest_host_error(const constantPoolHandle& pool, int which);
 
   static void add_to_initiating_loader(JavaThread* current, InstanceKlass* k,
-                                       ClassLoaderData* loader_data) NOT_CDS_RETURN;
+                                       ClassLoaderData* loader_data);
 
   static OopHandle  _java_system_loader;
   static OopHandle  _java_platform_loader;
@@ -331,6 +334,8 @@ protected:
   static bool add_loader_constraint(Symbol* name, Klass* klass_being_linked,  Handle loader1,
                                     Handle loader2);
   static void post_class_load_event(EventClassLoad* event, const InstanceKlass* k, const ClassLoaderData* init_cld);
+  static bool preload_from_null_free_field(InstanceKlass* ik, Handle class_loader, Symbol* sig, int field_index, TRAPS);
+  static void try_preload_from_loadable_descriptors(InstanceKlass* ik, Handle class_loader, Symbol* sig, int field_index, TRAPS);
   static InstanceKlass* load_shared_class(InstanceKlass* ik,
                                           Handle class_loader,
                                           Handle protection_domain,

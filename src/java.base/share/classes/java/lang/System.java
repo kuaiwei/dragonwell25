@@ -39,6 +39,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
 import java.lang.module.ModuleDescriptor;
+import java.lang.reflect.ClassFileFormatVersion;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
 import java.net.URI;
@@ -486,6 +487,21 @@ public final class System {
      * whether or not the given object's class overrides
      * hashCode().
      * The hash code for the null reference is zero.
+     *
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     *          The "identity hash code" of a {@linkplain Class#isValue() value object}
+     *          is computed by combining the identity hash codes of the value object's fields recursively.
+     *      </div>
+     * </div>
+     * @apiNote
+     * <div class="preview-block">
+     *      <div class="preview-comment">
+     *          Note that, like ==, this hash code exposes information about a value object's
+     *          private fields that might otherwise be hidden by an identity object.
+     *          Developers should be cautious about storing sensitive secrets in value object fields.
+     *      </div>
+     * </div>
      *
      * @param x object for which the hashCode is to be calculated
      * @return  the hashCode
@@ -2312,6 +2328,10 @@ public final class System {
                                                       ContinuationScope contScope,
                                                       Continuation continuation) {
                 return StackWalker.newInstance(options, null, contScope, continuation);
+            }
+
+            public int classFileFormatVersion(Class<?> clazz) {
+                return clazz.getClassFileVersion();
             }
 
             public String getLoaderNameID(ClassLoader loader) {

@@ -28,6 +28,7 @@ import java.lang.classfile.AttributeMapper.AttributeStability;
 import java.lang.classfile.attribute.*;
 
 import jdk.internal.classfile.impl.AbstractAttributeMapper.*;
+import jdk.internal.javac.PreviewFeature;
 
 /**
  * Attribute mappers for predefined (JVMS {@jvms 4.7}) and JDK-specific
@@ -80,6 +81,9 @@ public final class Attributes {
 
     /** LineNumberTable */
     public static final String NAME_LINE_NUMBER_TABLE = "LineNumberTable";
+
+    /** LoadableDescriptors */
+    public static final String NAME_LOADABLE_DESCRIPTORS = "LoadableDescriptors";
 
     /** LocalVariableTable */
     public static final String NAME_LOCAL_VARIABLE_TABLE = "LocalVariableTable";
@@ -243,6 +247,15 @@ public final class Attributes {
      */
     public static AttributeMapper<LineNumberTableAttribute> lineNumberTable() {
         return LineNumberTableMapper.INSTANCE;
+    }
+
+    /**
+     * {@return Attribute mapper for the {@code LoadableDescriptors} attribute}
+     * @since Valhalla
+     */
+    @PreviewFeature(feature = PreviewFeature.Feature.VALUE_OBJECTS)
+    public static AttributeMapper<LoadableDescriptorsAttribute> loadableDescriptors() {
+        return LoadableDescriptorsMapper.INSTANCE;
     }
 
     /**

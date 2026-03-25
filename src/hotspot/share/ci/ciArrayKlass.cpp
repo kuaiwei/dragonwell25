@@ -23,10 +23,13 @@
  */
 
 #include "ci/ciArrayKlass.hpp"
+#include "ci/ciFlatArrayKlass.hpp"
+#include "ci/ciInlineKlass.hpp"
 #include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciTypeArrayKlass.hpp"
 #include "ci/ciUtilities.inline.hpp"
 #include "memory/universe.hpp"
+#include "oops/inlineKlass.inline.hpp"
 
 // ciArrayKlass
 //
@@ -59,7 +62,7 @@ ciType* ciArrayKlass::element_type() {
   if (is_type_array_klass()) {
     return ciType::make(as_type_array_klass()->element_type());
   } else {
-    return as_obj_array_klass()->element_klass()->as_klass();
+    return element_klass()->as_klass();
   }
 }
 
@@ -71,12 +74,14 @@ ciType* ciArrayKlass::element_type() {
 ciType* ciArrayKlass::base_element_type() {
   if (is_type_array_klass()) {
     return ciType::make(as_type_array_klass()->element_type());
-  } else {
+  } else if (is_obj_array_klass()) {
     ciKlass* ek = as_obj_array_klass()->base_element_klass();
     if (ek->is_type_array_klass()) {
       return ciType::make(ek->as_type_array_klass()->element_type());
     }
     return ek;
+  } else {
+    return as_flat_array_klass()->base_element_klass();
   }
 }
 
@@ -96,11 +101,57 @@ bool ciArrayKlass::is_leaf_type() {
 // ciArrayKlass::make
 //
 // Make an array klass of the specified element type.
-ciArrayKlass* ciArrayKlass::make(ciType* element_type) {
+ciArrayKlass* ciArrayKlass::make(ciType* element_type, bool null_free, bool atomic, bool vm_type) {
   if (element_type->is_primitive_type()) {
     return ciTypeArrayKlass::make(element_type->basic_type());
-  } else {
-    return ciObjArrayKlass::make(element_type->as_klass());
   }
+
+  ciKlass* klass = element_type->as_klass();
+  assert(!null_free || !klass->is_loaded() || klass->is_inlinetype() || klass->is_abstract() ||
+         klass->is_java_lang_Object(), "only value classes are null free");
+  if (klass->is_loaded() && klass->is_inlinetype() && vm_type) {
+    GUARDED_VM_ENTRY(
+      EXCEPTION_CONTEXT;
+      InlineKlass* vk = InlineKlass::cast(klass->get_Klass());
+      ArrayKlass::ArrayProperties props = ArrayKlass::ArrayProperties::DEFAULT;
+      if (null_free) {
+        props = (ArrayKlass::ArrayProperties)(props | ArrayKlass::ArrayProperties::NULL_RESTRICTED);
+      }
+      if (!atomic) {
+        props = (ArrayKlass::ArrayProperties)(props | ArrayKlass::ArrayProperties::NON_ATOMIC);
+      }
+      ArrayKlass* ak = vk->array_klass(THREAD);
+      ak = ObjArrayKlass::cast(ak)->klass_with_properties(props, THREAD);
+      if (HAS_PENDING_EXCEPTION) {
+        CLEAR_PENDING_EXCEPTION;
+      } else if (ak->is_flatArray_klass()) {
+        return CURRENT_THREAD_ENV->get_flat_array_klass(ak);
+      } else if (ak->is_refArray_klass()) {
+        return CURRENT_THREAD_ENV->get_obj_array_klass(ak);
+      }
+    )
+  }
+  return ciObjArrayKlass::make(klass, vm_type);
 }
 
+int ciArrayKlass::array_header_in_bytes() {
+  return get_ArrayKlass()->array_header_in_bytes();
+}
+
+ciInstance* ciArrayKlass::component_mirror_instance() const {
+  GUARDED_VM_ENTRY(
+    oop component_mirror = ArrayKlass::cast(get_Klass())->component_mirror();
+    return CURRENT_ENV->get_instance(component_mirror);
+  )
+}
+
+bool ciArrayKlass::is_elem_null_free() const {
+  GUARDED_VM_ENTRY(return is_loaded() && get_Klass()->is_null_free_array_klass();)
+}
+
+bool ciArrayKlass::is_elem_atomic() {
+  ciKlass* elem = element_klass();
+  GUARDED_VM_ENTRY(return elem != nullptr && elem->is_inlinetype() &&
+                          (ArrayKlass::cast(get_Klass())->properties() & ArrayKlass::ArrayProperties::INVALID) == 0 &&
+                          (ArrayKlass::cast(get_Klass())->properties() & ArrayKlass::ArrayProperties::NON_ATOMIC) == 0;)
+}

@@ -26,6 +26,7 @@
 #define SHARE_CDS_CDSCONFIG_HPP
 
 #include "memory/allStatic.hpp"
+#include "runtime/arguments.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/macros.hpp"
 
@@ -43,6 +44,9 @@ class CDSConfig : public AllStatic {
   static bool _has_aot_linked_classes;
   static bool _is_single_command_training;
   static bool _has_temp_aot_config_file;
+
+  static bool _module_patching_disables_cds;
+  static bool _java_base_module_patching_disables_cds;
 
   const static char* _default_archive_path;
   const static char* _input_static_archive_path;
@@ -94,7 +98,12 @@ public:
   static void check_internal_module_property(const char* key, const char* value) NOT_CDS_RETURN;
   static void check_incompatible_property(const char* key, const char* value) NOT_CDS_RETURN;
   static bool has_unsupported_runtime_module_options() NOT_CDS_RETURN_(false);
-  static bool check_vm_args_consistency(bool patch_mod_javabase, bool mode_flag_cmd_line) NOT_CDS_RETURN_(true);
+  static bool check_vm_args_consistency(bool mode_flag_cmd_line) NOT_CDS_RETURN_(true);
+
+  static bool module_patching_disables_cds() { return CDS_ONLY(_module_patching_disables_cds) NOT_CDS(false); }
+  static void set_module_patching_disables_cds() { CDS_ONLY(_module_patching_disables_cds = true;) }
+  static bool java_base_module_patching_disables_cds() { return CDS_ONLY(_java_base_module_patching_disables_cds) NOT_CDS(false); }
+  static void set_java_base_module_patching_disables_cds() { CDS_ONLY(_java_base_module_patching_disables_cds = true;) }
   static const char* type_of_archive_being_loaded();
   static const char* type_of_archive_being_written();
   static void prepare_for_dumping();
@@ -187,6 +196,10 @@ public:
   static bool is_using_full_module_graph()                   NOT_CDS_JAVA_HEAP_RETURN_(false);
   static void stop_dumping_full_module_graph(const char* reason = nullptr) NOT_CDS_JAVA_HEAP_RETURN;
   static void stop_using_full_module_graph(const char* reason = nullptr) NOT_CDS_JAVA_HEAP_RETURN;
+
+  static bool is_valhalla_preview() {
+    return Arguments::enable_preview() && EnableValhalla;
+  }
 
   // --- AOT code
 

@@ -40,6 +40,7 @@ import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import static java.lang.constant.ConstantDescs.INIT_NAME;
 import static java.util.Objects.requireNonNull;
 import static jdk.internal.classfile.impl.BytecodeHelpers.*;
 import static jdk.internal.classfile.impl.RawBytecodeHelper.*;
@@ -373,7 +374,7 @@ public final class DirectCodeBuilder
                             dcb.methodInfo.methodTypeSymbol().displayDescriptor()));
                 }
 
-                boolean codeMatch = dcb.original != null && codeAndExceptionsMatch(codeLength);
+                boolean codeMatch = dcb.codeAndExceptionsMatch(codeLength, buf);
                 buf.setLabelContext(dcb, codeMatch);
                 var context = dcb.context;
                 if (context.stackMapsWhenRequired()) {
@@ -452,7 +453,7 @@ public final class DirectCodeBuilder
         }
     }
 
-    private boolean codeAndExceptionsMatch(int codeLength) {
+    private boolean codeAndExceptionsMatch(int codeLength, BufWriterImpl buf) {
         boolean codeAttributesMatch;
         if (original instanceof CodeImpl cai && canWriteDirect(cai.constantPool())) {
             codeAttributesMatch = cai.codeLength == curPc()
@@ -461,6 +462,22 @@ public final class DirectCodeBuilder
                 var bw = new BufWriterImpl(constantPool, context);
                 writeExceptionHandlers(bw);
                 codeAttributesMatch = cai.classReader.compare(bw, 0, cai.exceptionHandlerPos, bw.size());
+            }
+
+            if (codeAttributesMatch) {
+                var thisIsConstructor = methodInfo.methodName().equalsString(INIT_NAME);
+                var originalIsConstructor = cai.enclosingMethod.methodName().equalsString(INIT_NAME);
+                if (thisIsConstructor || originalIsConstructor) {
+                    if (thisIsConstructor != originalIsConstructor) {
+                        codeAttributesMatch = false;
+                    }
+                }
+
+                if (codeAttributesMatch && thisIsConstructor) {
+                    if (!buf.strictFieldsMatch(cai.classReader.getContainedClass())) {
+                        codeAttributesMatch = false;
+                    }
+                }
             }
         }
         else

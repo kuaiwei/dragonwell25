@@ -1623,25 +1623,24 @@ Node* ModDNode::Ideal(PhaseGVN* phase, bool can_reshape) {
 Node* ModFloatingNode::replace_with_con(PhaseIterGVN* phase, const Type* con) {
   Compile* C = phase->C;
   Node* con_node = phase->makecon(con);
-  CallProjections projs;
-  extract_projections(&projs, false, false);
-  phase->replace_node(projs.fallthrough_proj, in(TypeFunc::Control));
-  if (projs.fallthrough_catchproj != nullptr) {
-    phase->replace_node(projs.fallthrough_catchproj, in(TypeFunc::Control));
+  CallProjections* projs = extract_projections(false, false);
+  phase->replace_node(projs->fallthrough_proj, in(TypeFunc::Control));
+  if (projs->fallthrough_catchproj != nullptr) {
+    phase->replace_node(projs->fallthrough_catchproj, in(TypeFunc::Control));
   }
-  if (projs.fallthrough_memproj != nullptr) {
-    phase->replace_node(projs.fallthrough_memproj, in(TypeFunc::Memory));
+  if (projs->fallthrough_memproj != nullptr) {
+    phase->replace_node(projs->fallthrough_memproj, in(TypeFunc::Memory));
   }
-  if (projs.catchall_memproj != nullptr) {
-    phase->replace_node(projs.catchall_memproj, C->top());
+  if (projs->catchall_memproj != nullptr) {
+    phase->replace_node(projs->catchall_memproj, C->top());
   }
-  if (projs.fallthrough_ioproj != nullptr) {
-    phase->replace_node(projs.fallthrough_ioproj, in(TypeFunc::I_O));
+  if (projs->fallthrough_ioproj != nullptr) {
+    phase->replace_node(projs->fallthrough_ioproj, in(TypeFunc::I_O));
   }
-  assert(projs.catchall_ioproj == nullptr, "no exceptions from floating mod");
-  assert(projs.catchall_catchproj == nullptr, "no exceptions from floating mod");
-  if (projs.resproj != nullptr) {
-    phase->replace_node(projs.resproj, con_node);
+  assert(projs->catchall_ioproj == nullptr, "no exceptions from floating mod");
+  assert(projs->catchall_catchproj == nullptr, "no exceptions from floating mod");
+  if (projs->resproj[0] != nullptr) {
+    phase->replace_node(projs->resproj[0], con_node);
   }
   phase->replace_node(this, C->top());
   C->remove_macro_node(this);
@@ -1701,7 +1700,7 @@ DivModLNode* DivModLNode::make(Node* div_or_mod) {
 
 //------------------------------match------------------------------------------
 // return result(s) along with their RegMask info
-Node *DivModINode::match( const ProjNode *proj, const Matcher *match ) {
+Node *DivModINode::match(const ProjNode *proj, const Matcher *match, const RegMask* mask) {
   uint ideal_reg = proj->ideal_reg();
   RegMask rm;
   if (proj->_con == div_proj_num) {
@@ -1716,7 +1715,7 @@ Node *DivModINode::match( const ProjNode *proj, const Matcher *match ) {
 
 //------------------------------match------------------------------------------
 // return result(s) along with their RegMask info
-Node *DivModLNode::match( const ProjNode *proj, const Matcher *match ) {
+Node *DivModLNode::match(const ProjNode *proj, const Matcher *match, const RegMask* mask) {
   uint ideal_reg = proj->ideal_reg();
   RegMask rm;
   if (proj->_con == div_proj_num) {
@@ -1754,7 +1753,7 @@ UDivModLNode* UDivModLNode::make(Node* div_or_mod) {
 
 //------------------------------match------------------------------------------
 // return result(s) along with their RegMask info
-Node* UDivModINode::match( const ProjNode *proj, const Matcher *match ) {
+Node* UDivModINode::match(const ProjNode* proj, const Matcher* match, const RegMask* mask) {
   uint ideal_reg = proj->ideal_reg();
   RegMask rm;
   if (proj->_con == div_proj_num) {
@@ -1769,7 +1768,7 @@ Node* UDivModINode::match( const ProjNode *proj, const Matcher *match ) {
 
 //------------------------------match------------------------------------------
 // return result(s) along with their RegMask info
-Node* UDivModLNode::match( const ProjNode *proj, const Matcher *match ) {
+Node* UDivModLNode::match( const ProjNode* proj, const Matcher* match, const RegMask* mask) {
   uint ideal_reg = proj->ideal_reg();
   RegMask rm;
   if (proj->_con == div_proj_num) {

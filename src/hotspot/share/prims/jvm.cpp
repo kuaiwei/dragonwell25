@@ -58,6 +58,7 @@
 #include "oops/access.inline.hpp"
 #include "oops/constantPool.hpp"
 #include "oops/fieldStreams.inline.hpp"
+#include "oops/flatArrayKlass.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
 #include "oops/method.hpp"
@@ -65,6 +66,7 @@
 #include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.inline.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/refArrayOop.inline.hpp"
 #include "prims/foreignGlobals.hpp"
 #include "prims/jvm_misc.hpp"
 #include "prims/jvmtiExport.hpp"
@@ -413,6 +415,154 @@ JVM_ENTRY(jstring, JVM_GetTemporaryDirectory(JNIEnv *env))
   return (jstring) JNIHandles::make_local(THREAD, h());
 JVM_END
 
+static void validate_array_arguments(Klass* elmClass, jint len, TRAPS) {
+  if (len < 0) {
+    THROW_MSG(vmSymbols::java_lang_IllegalArgumentException(), "Array length is negative");
+  }
+  elmClass->initialize(CHECK);
+  if (elmClass->is_array_klass() || elmClass->is_identity_class()) {
+    THROW_MSG(vmSymbols::java_lang_IllegalArgumentException(), "Element class is not a value class");
+  }
+  if (elmClass->is_abstract()) {
+    THROW_MSG(vmSymbols::java_lang_IllegalArgumentException(), "Element class is abstract");
+  }
+}
+
+JVM_ENTRY(jarray, JVM_CopyOfSpecialArray(JNIEnv *env, jarray orig, jint from, jint to))
+  oop o = JNIHandles::resolve_non_null(orig);
+  assert(o->is_array(), "Must be");
+  oop array = nullptr;
+  arrayOop org = (arrayOop)o;
+  arrayHandle oh(THREAD, org);
+  ObjArrayKlass* ak = ObjArrayKlass::cast(org->klass());
+  InlineKlass* vk = InlineKlass::cast(ak->element_klass());
+  int len = to - from;  // length of the new array
+  if (ak->is_null_free_array_klass()) {
+    if ((len != 0) && (from >= org->length() || to > org->length())) {
+      THROW_MSG_NULL(vmSymbols::java_lang_IllegalArgumentException(), "Copying of null-free array with uninitialized elements");
+    }
+  }
+  if (org->is_flatArray()) {
+    FlatArrayKlass* fak = FlatArrayKlass::cast(org->klass());
+    LayoutKind lk = fak->layout_kind();
+    ArrayKlass::ArrayProperties props = ArrayKlass::ArrayProperties::DEFAULT;
+    switch(lk) {
+      case LayoutKind::ATOMIC_FLAT:
+        props = ArrayKlass::ArrayProperties::NULL_RESTRICTED;
+      break;
+      case LayoutKind::NON_ATOMIC_FLAT:
+        props = (ArrayKlass::ArrayProperties)(ArrayKlass::ArrayProperties::NULL_RESTRICTED | ArrayKlass::ArrayProperties::NON_ATOMIC);
+      break;
+      case LayoutKind::NULLABLE_ATOMIC_FLAT:
+      props = ArrayKlass::ArrayProperties::NON_ATOMIC;
+      break;
+      default:
+        ShouldNotReachHere();
+    }
+    array = oopFactory::new_flatArray(vk, len, props, lk, CHECK_NULL);
+    arrayHandle ah(THREAD, (arrayOop)array);
+    int end = to < oh()->length() ? to : oh()->length();
+    for (int i = from; i < end; i++) {
+      void* src = ((flatArrayOop)oh())->value_at_addr(i, fak->layout_helper());
+      void* dst = ((flatArrayOop)ah())->value_at_addr(i - from, fak->layout_helper());
+      vk->copy_payload_to_addr(src, dst, lk, false);
+    }
+    array = ah();
+  } else {
+    ArrayKlass::ArrayProperties props = org->is_null_free_array() ? ArrayKlass::ArrayProperties::NULL_RESTRICTED : ArrayKlass::ArrayProperties::DEFAULT;
+    array = oopFactory::new_objArray(vk, len, props,  CHECK_NULL);
+    int end = to < oh()->length() ? to : oh()->length();
+    for (int i = from; i < end; i++) {
+      if (i < ((objArrayOop)oh())->length()) {
+        ((objArrayOop)array)->obj_at_put(i - from, ((objArrayOop)oh())->obj_at(i));
+      } else {
+        assert(!ak->is_null_free_array_klass(), "Must be a nullable array");
+        ((objArrayOop)array)->obj_at_put(i - from, nullptr);
+      }
+    }
+  }
+  return (jarray) JNIHandles::make_local(THREAD, array);
+JVM_END
+
+JVM_ENTRY(jarray, JVM_NewNullRestrictedNonAtomicArray(JNIEnv *env, jclass elmClass, jint len, jobject initVal))
+  oop mirror = JNIHandles::resolve_non_null(elmClass);
+  oop init = JNIHandles::resolve(initVal);
+  if (init == nullptr) {
+    THROW_MSG_NULL(vmSymbols::java_lang_IllegalArgumentException(), "Initial value cannot be null");
+  }
+  Handle init_h(THREAD, init);
+  Klass* klass = java_lang_Class::as_Klass(mirror);
+  if (klass != init_h()->klass()) {
+    THROW_MSG_NULL(vmSymbols::java_lang_IllegalArgumentException(), "Type mismatch between array and initial value");
+  }
+  validate_array_arguments(klass, len, CHECK_NULL);
+  InlineKlass* vk = InlineKlass::cast(klass);
+  ArrayKlass::ArrayProperties props = (ArrayKlass::ArrayProperties)(ArrayKlass::ArrayProperties::NON_ATOMIC | ArrayKlass::ArrayProperties::NULL_RESTRICTED);
+  objArrayOop array = oopFactory::new_objArray(klass, len, props, CHECK_NULL);
+  for (int i = 0; i < len; i++) {
+    array->obj_at_put(i, init_h() /*, CHECK_NULL*/ );
+  }
+  return (jarray) JNIHandles::make_local(THREAD, array);
+JVM_END
+
+JVM_ENTRY(jarray, JVM_NewNullRestrictedAtomicArray(JNIEnv *env, jclass elmClass, jint len, jobject initVal))
+  oop mirror = JNIHandles::resolve_non_null(elmClass);
+  oop init = JNIHandles::resolve(initVal);
+  if (init == nullptr) {
+    THROW_MSG_NULL(vmSymbols::java_lang_IllegalArgumentException(), "Initial value cannot be null");
+  }
+  Handle init_h(THREAD, init);
+  Klass* klass = java_lang_Class::as_Klass(mirror);
+  if (klass != init_h()->klass()) {
+    THROW_MSG_NULL(vmSymbols::java_lang_IllegalArgumentException(), "Type mismatch between array and initial value");
+  }
+  validate_array_arguments(klass, len, CHECK_NULL);
+  InlineKlass* vk = InlineKlass::cast(klass);
+  ArrayKlass::ArrayProperties props = (ArrayKlass::ArrayProperties)(ArrayKlass::ArrayProperties::NULL_RESTRICTED);
+  objArrayOop array = oopFactory::new_objArray(klass, len, props, CHECK_NULL);
+  for (int i = 0; i < len; i++) {
+    array->obj_at_put(i, init_h() /*, CHECK_NULL*/ );
+  }
+  return (jarray) JNIHandles::make_local(THREAD, array);
+JVM_END
+
+JVM_ENTRY(jarray, JVM_NewNullableAtomicArray(JNIEnv *env, jclass elmClass, jint len))
+  oop mirror = JNIHandles::resolve_non_null(elmClass);
+  Klass* klass = java_lang_Class::as_Klass(mirror);
+  klass->initialize(CHECK_NULL);
+  validate_array_arguments(klass, len, CHECK_NULL);
+  InlineKlass* vk = InlineKlass::cast(klass);
+  ArrayKlass::ArrayProperties props = (ArrayKlass::ArrayProperties)(ArrayKlass::ArrayProperties::DEFAULT);
+  objArrayOop array = oopFactory::new_objArray(klass, len, props, CHECK_NULL);
+  return (jarray) JNIHandles::make_local(THREAD, array);
+JVM_END
+
+JVM_ENTRY(jboolean, JVM_IsFlatArray(JNIEnv *env, jobject obj))
+  arrayOop oop = arrayOop(JNIHandles::resolve_non_null(obj));
+  return oop->is_flatArray();
+JVM_END
+
+JVM_ENTRY(jboolean, JVM_IsNullRestrictedArray(JNIEnv *env, jobject obj))
+  arrayOop oop = arrayOop(JNIHandles::resolve_non_null(obj));
+  return oop->is_null_free_array();
+JVM_END
+
+JVM_ENTRY(jboolean, JVM_IsAtomicArray(JNIEnv *env, jobject obj))
+  // There are multiple cases where an array can/must support atomic access:
+  //   - the array is a reference array
+  //   - the array uses an atomic flat layout: NULLABLE_ATOMIC_FLAT or ATOMIC_FLAT
+  //   - the array is flat and its component type is naturally atomic
+  arrayOop oop = arrayOop(JNIHandles::resolve_non_null(obj));
+  if (oop->is_refArray()) return true;
+  if (oop->is_flatArray()) {
+    FlatArrayKlass* fak = FlatArrayKlass::cast(oop->klass());
+    if (fak->layout_kind() == LayoutKind::ATOMIC_FLAT || fak->layout_kind() == LayoutKind::NULLABLE_ATOMIC_FLAT) {
+      return true;
+    }
+    if (fak->element_klass()->is_naturally_atomic()) return true;
+  }
+  return false;
+JVM_END
 
 // java.lang.Runtime /////////////////////////////////////////////////////////////////////////
 
@@ -621,8 +771,28 @@ JVM_END
 
 JVM_ENTRY(jint, JVM_IHashCode(JNIEnv* env, jobject handle))
   // as implemented in the classic virtual machine; return 0 if object is null
-  return handle == nullptr ? 0 :
-         checked_cast<jint>(ObjectSynchronizer::FastHashCode (THREAD, JNIHandles::resolve_non_null(handle)));
+  if (handle == nullptr) {
+    return 0;
+  }
+  oop obj = JNIHandles::resolve_non_null(handle);
+  if (EnableValhalla && obj->klass()->is_inline_klass()) {
+      JavaValue result(T_INT);
+      JavaCallArguments args;
+      Handle ho(THREAD, obj);
+      args.push_oop(ho);
+      methodHandle method(THREAD, Universe::value_object_hash_code_method());
+      JavaCalls::call(&result, method, &args, THREAD);
+      if (HAS_PENDING_EXCEPTION) {
+        if (!PENDING_EXCEPTION->is_a(vmClasses::Error_klass())) {
+          Handle e(THREAD, PENDING_EXCEPTION);
+          CLEAR_PENDING_EXCEPTION;
+          THROW_MSG_CAUSE_(vmSymbols::java_lang_InternalError(), "Internal error in hashCode", e, false);
+        }
+      }
+      return result.get_jint();
+  } else {
+    return checked_cast<jint>(ObjectSynchronizer::FastHashCode(THREAD, obj));
+  }
 JVM_END
 
 
@@ -668,6 +838,12 @@ JVM_ENTRY(jobject, JVM_Clone(JNIEnv* env, jobject handle))
        InstanceKlass::cast(klass)->reference_type() != REF_NONE)) {
     ResourceMark rm(THREAD);
     THROW_MSG_NULL(vmSymbols::java_lang_CloneNotSupportedException(), klass->external_name());
+  }
+
+  if (klass->is_inline_klass()) {
+    // Value instances have no identity, so return the current instance instead of allocating a new one
+    // Value classes cannot have finalizers, so the method can return immediately
+    return JNIHandles::make_local(THREAD, obj());
   }
 
   // Make shallow object copy
@@ -1164,7 +1340,8 @@ JVM_ENTRY(jobjectArray, JVM_GetClassInterfaces(JNIEnv *env, jclass cls))
   // Figure size of result array
   int size;
   if (klass->is_instance_klass()) {
-    size = InstanceKlass::cast(klass)->local_interfaces()->length();
+    InstanceKlass* ik = InstanceKlass::cast(klass);
+    size = ik->local_interfaces()->length();
   } else {
     assert(klass->is_objArray_klass() || klass->is_typeArray_klass(), "Illegal mirror klass");
     size = 2;
@@ -1177,7 +1354,8 @@ JVM_ENTRY(jobjectArray, JVM_GetClassInterfaces(JNIEnv *env, jclass cls))
   if (klass->is_instance_klass()) {
     // Regular instance klass, fill in all local interfaces
     for (int index = 0; index < size; index++) {
-      Klass* k = InstanceKlass::cast(klass)->local_interfaces()->at(index);
+      InstanceKlass* ik = InstanceKlass::cast(klass);
+      Klass* k = ik->local_interfaces()->at(index);
       result->obj_at_put(index, k->java_mirror());
     }
   } else {
@@ -1197,7 +1375,6 @@ JVM_ENTRY(jboolean, JVM_IsHiddenClass(JNIEnv *env, jclass cls))
   Klass* k = java_lang_Class::as_Klass(mirror);
   return k->is_hidden();
 JVM_END
-
 
 class ScopedValueBindingsResolver {
 public:
@@ -1682,11 +1859,11 @@ static jobjectArray get_class_declared_methods_helper(
   // Select methods matching the criteria.
   for (int i = 0; i < methods_length; i++) {
     Method* method = methods->at(i);
-    if (want_constructor && !method->is_object_initializer()) {
+    if (want_constructor && !method->is_object_constructor()) {
       continue;
     }
     if (!want_constructor &&
-        (method->is_object_initializer() || method->is_static_initializer() ||
+        (method->is_object_constructor() || method->is_class_initializer() ||
          method->is_overpass())) {
       continue;
     }
@@ -1714,6 +1891,7 @@ static jobjectArray get_class_declared_methods_helper(
     } else {
       oop m;
       if (want_constructor) {
+        assert(method->is_object_constructor(), "must be");
         m = Reflection::new_constructor(method, CHECK_NULL);
       } else {
         m = Reflection::new_method(method, false, CHECK_NULL);
@@ -1996,10 +2174,9 @@ static jobject get_method_at_helper(const constantPoolHandle& cp, jint index, bo
     THROW_MSG_NULL(vmSymbols::java_lang_RuntimeException(), "Unable to look up method in target class");
   }
   oop method;
-  if (m->is_object_initializer()) {
+  if (m->is_object_constructor()) {
     method = Reflection::new_constructor(m, CHECK_NULL);
   } else {
-    // new_method accepts <clinit> as Method here
     method = Reflection::new_method(m, true, CHECK_NULL);
   }
   return JNIHandles::make_local(THREAD, method);
@@ -2449,7 +2626,7 @@ JVM_ENTRY(jboolean, JVM_IsConstructorIx(JNIEnv *env, jclass cls, int method_inde
   Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(cls));
   k = JvmtiThreadState::class_to_verify_considering_redefinition(k, thread);
   Method* method = InstanceKlass::cast(k)->methods()->at(method_index);
-  return method->name() == vmSymbols::object_initializer_name();
+  return method->is_object_constructor();
 JVM_END
 
 
@@ -3249,6 +3426,10 @@ JVM_LEAF(jboolean, JVM_IsPreviewEnabled(void))
   return Arguments::enable_preview() ? JNI_TRUE : JNI_FALSE;
 JVM_END
 
+JVM_LEAF(jboolean, JVM_IsValhallaEnabled(void))
+  return EnableValhalla ? JNI_TRUE : JNI_FALSE;
+JVM_END
+
 JVM_LEAF(jboolean, JVM_IsContinuationsSupported(void))
   return VMContinuations ? JNI_TRUE : JNI_FALSE;
 JVM_END
@@ -3328,7 +3509,9 @@ JVM_ENTRY(jobject, JVM_InvokeMethod(JNIEnv *env, jobject method, jobject obj, jo
   if (thread->stack_overflow_state()->stack_available((address) &method_handle) >= JVMInvokeMethodSlack) {
     method_handle = Handle(THREAD, JNIHandles::resolve(method));
     Handle receiver(THREAD, JNIHandles::resolve(obj));
-    objArrayHandle args(THREAD, objArrayOop(JNIHandles::resolve(args0)));
+    objArrayHandle args(THREAD, (objArrayOop)JNIHandles::resolve(args0));
+    assert(args() == nullptr || !args->is_flatArray(), "args are never flat or are they???");
+
     oop result = Reflection::invoke_method(method_handle(), receiver, args, CHECK_NULL);
     jobject res = JNIHandles::make_local(THREAD, result);
     if (JvmtiExport::should_post_vm_object_alloc()) {
@@ -3348,8 +3531,9 @@ JVM_END
 
 
 JVM_ENTRY(jobject, JVM_NewInstanceFromConstructor(JNIEnv *env, jobject c, jobjectArray args0))
+  objArrayHandle args(THREAD, (objArrayOop)JNIHandles::resolve(args0));
+  assert(args() == nullptr || !args->is_flatArray(), "args are never flat or are they???");
   oop constructor_mirror = JNIHandles::resolve(c);
-  objArrayHandle args(THREAD, objArrayOop(JNIHandles::resolve(args0)));
   oop result = Reflection::invoke_constructor(constructor_mirror, args, CHECK_NULL);
   jobject res = JNIHandles::make_local(THREAD, result);
   if (JvmtiExport::should_post_vm_object_alloc()) {
@@ -3589,12 +3773,13 @@ JVM_ENTRY(jobjectArray, JVM_DumpThreads(JNIEnv *env, jclass threadClass, jobject
   if (k != vmClasses::Thread_klass()) {
     THROW_NULL(vmSymbols::java_lang_IllegalArgumentException());
   }
+  refArrayHandle rah(THREAD, (refArrayOop)ah()); // j.l.Thread is an identity class, arrays are always reference arrays
 
   ResourceMark rm(THREAD);
 
   GrowableArray<instanceHandle>* thread_handle_array = new GrowableArray<instanceHandle>(num_threads);
   for (int i = 0; i < num_threads; i++) {
-    oop thread_obj = ah->obj_at(i);
+    oop thread_obj = rah->obj_at(i);
     instanceHandle h(THREAD, (instanceOop) thread_obj);
     thread_handle_array->append(h);
   }

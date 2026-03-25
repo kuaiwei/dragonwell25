@@ -85,8 +85,6 @@ import com.sun.tools.javac.util.Log.WriterKind;
 
 import static com.sun.tools.javac.code.Kinds.Kind.*;
 
-import com.sun.tools.javac.code.Lint;
-import com.sun.tools.javac.code.Lint.LintCategory;
 import com.sun.tools.javac.code.Symbol.ModuleSymbol;
 
 import com.sun.tools.javac.resources.CompilerProperties.Errors;
@@ -1620,8 +1618,8 @@ public class JavaCompiler {
         ScanNested scanner = new ScanNested();
         scanner.scan(env.tree);
         for (Env<AttrContext> dep: scanner.dependencies) {
-        if (!compileStates.isDone(dep, CompileState.WARN))
-            desugaredEnvs.put(dep, desugar(warn(flow(attribute(dep)))));
+            if (!compileStates.isDone(dep, CompileState.WARN))
+                desugaredEnvs.put(dep, desugar(warn(flow(attribute(dep)))));
         }
 
         //We need to check for error another time as more classes might
@@ -1700,6 +1698,13 @@ public class JavaCompiler {
                 }
                 compileStates.put(env, CompileState.UNLAMBDA);
             }
+
+            if (shouldStop(CompileState.STRICT_FIELDS_PROXIES))
+                return;
+            for (JCTree def : cdefs) {
+                LocalProxyVarsGen.instance(context).translateTopLevelClass(def, localMake);
+            }
+            compileStates.put(env, CompileState.STRICT_FIELDS_PROXIES);
 
             //generate code for each class
             for (List<JCTree> l = cdefs; l.nonEmpty(); l = l.tail) {

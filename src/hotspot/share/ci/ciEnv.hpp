@@ -199,6 +199,10 @@ private:
     if (o == nullptr) return nullptr;
     return get_object(o)->as_instance();
   }
+  ciFlatArrayKlass* get_flat_array_klass(Klass* o) {
+    if (o == nullptr) return nullptr;
+    return get_metadata(o)->as_flat_array_klass();
+  }
   ciObjArrayKlass* get_obj_array_klass(Klass* o) {
     if (o == nullptr) return nullptr;
     return get_metadata(o)->as_obj_array_klass();
@@ -499,6 +503,14 @@ public:
   void dump_replay_data_helper(outputStream* out);
   void dump_compile_data(outputStream* out);
   void dump_replay_data_version(outputStream* out);
+
+  ciWrapper* make_early_larval_wrapper(ciType* type) {
+    return _factory->make_early_larval_wrapper(type);
+  }
+
+  ciWrapper* make_null_free_wrapper(ciType* type) {
+    return _factory->make_null_free_wrapper(type);
+  }
 
   const char *dyno_name(const InstanceKlass* ik) const;
   const char *replay_name(const InstanceKlass* ik) const;

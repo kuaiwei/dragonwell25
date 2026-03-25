@@ -86,6 +86,7 @@ class EncodePNode;
 class EncodePKlassNode;
 class FastLockNode;
 class FastUnlockNode;
+class FlatArrayCheckNode;
 class HaltNode;
 class IfNode;
 class IfProjNode;
@@ -118,12 +119,14 @@ class MachJumpNode;
 class MachNode;
 class MachNullCheckNode;
 class MachProjNode;
+class MachPrologNode;
 class MachReturnNode;
 class MachSafePointNode;
 class MachSpillCopyNode;
 class MachTempNode;
 class MachMergeNode;
 class MachMemBarNode;
+class MachVEPNode;
 class Matcher;
 class MemBarNode;
 class MemBarStoreStoreNode;
@@ -181,6 +184,7 @@ class SubTypeCheckNode;
 class Type;
 class TypeNode;
 class UnlockNode;
+class InlineTypeNode;
 class VectorNode;
 class LoadVectorNode;
 class LoadVectorMaskedNode;
@@ -695,6 +699,7 @@ public:
       DEFINE_CLASS_ID(MemBar,      Multi, 3)
         DEFINE_CLASS_ID(Initialize,       MemBar, 0)
         DEFINE_CLASS_ID(MemBarStoreStore, MemBar, 1)
+        DEFINE_CLASS_ID(Blackhole,        MemBar, 2)
 
     DEFINE_CLASS_ID(Mach,  Node, 1)
       DEFINE_CLASS_ID(MachReturn, Mach, 0)
@@ -716,6 +721,8 @@ public:
         DEFINE_CLASS_ID(MachJump,       MachConstant, 0)
       DEFINE_CLASS_ID(MachMerge,        Mach, 6)
       DEFINE_CLASS_ID(MachMemBar,       Mach, 7)
+      DEFINE_CLASS_ID(MachProlog,       Mach, 8)
+      DEFINE_CLASS_ID(MachVEP,          Mach, 9)
 
     DEFINE_CLASS_ID(Type,  Node, 2)
       DEFINE_CLASS_ID(Phi,   Type, 0)
@@ -748,10 +755,11 @@ public:
         DEFINE_CLASS_ID(NegV, Vector, 8)
         DEFINE_CLASS_ID(SaturatingVector, Vector, 9)
         DEFINE_CLASS_ID(MulVL, Vector, 10)
-      DEFINE_CLASS_ID(Con, Type, 8)
+      DEFINE_CLASS_ID(InlineType, Type, 8)
+      DEFINE_CLASS_ID(Con, Type, 9)
           DEFINE_CLASS_ID(ConI, Con, 0)
-      DEFINE_CLASS_ID(SafePointScalarMerge, Type, 9)
-      DEFINE_CLASS_ID(Convert, Type, 10)
+      DEFINE_CLASS_ID(SafePointScalarMerge, Type, 10)
+      DEFINE_CLASS_ID(Convert, Type, 11)
 
 
     DEFINE_CLASS_ID(Proj,  Node, 3)
@@ -789,9 +797,10 @@ public:
 
     DEFINE_CLASS_ID(Sub,   Node, 6)
       DEFINE_CLASS_ID(Cmp,   Sub, 0)
-        DEFINE_CLASS_ID(FastLock,   Cmp, 0)
-        DEFINE_CLASS_ID(FastUnlock, Cmp, 1)
-        DEFINE_CLASS_ID(SubTypeCheck,Cmp, 2)
+        DEFINE_CLASS_ID(FastLock,       Cmp, 0)
+        DEFINE_CLASS_ID(FastUnlock,     Cmp, 1)
+        DEFINE_CLASS_ID(SubTypeCheck,   Cmp, 2)
+        DEFINE_CLASS_ID(FlatArrayCheck, Cmp, 3)
 
     DEFINE_CLASS_ID(MergeMem, Node, 7)
     DEFINE_CLASS_ID(Bool,     Node, 8)
@@ -900,6 +909,7 @@ public:
   DEFINE_CLASS_QUERY(ArrayCopy)
   DEFINE_CLASS_QUERY(BaseCountedLoop)
   DEFINE_CLASS_QUERY(BaseCountedLoopEnd)
+  DEFINE_CLASS_QUERY(Blackhole)
   DEFINE_CLASS_QUERY(Bool)
   DEFINE_CLASS_QUERY(BoxLock)
   DEFINE_CLASS_QUERY(Call)
@@ -932,6 +942,7 @@ public:
   DEFINE_CLASS_QUERY(EncodePKlass)
   DEFINE_CLASS_QUERY(FastLock)
   DEFINE_CLASS_QUERY(FastUnlock)
+  DEFINE_CLASS_QUERY(FlatArrayCheck)
   DEFINE_CLASS_QUERY(Halt)
   DEFINE_CLASS_QUERY(If)
   DEFINE_CLASS_QUERY(RangeCheck)
@@ -964,12 +975,14 @@ public:
   DEFINE_CLASS_QUERY(MachJump)
   DEFINE_CLASS_QUERY(MachNullCheck)
   DEFINE_CLASS_QUERY(MachProj)
+  DEFINE_CLASS_QUERY(MachProlog)
   DEFINE_CLASS_QUERY(MachReturn)
   DEFINE_CLASS_QUERY(MachSafePoint)
   DEFINE_CLASS_QUERY(MachSpillCopy)
   DEFINE_CLASS_QUERY(MachTemp)
   DEFINE_CLASS_QUERY(MachMemBar)
   DEFINE_CLASS_QUERY(MachMerge)
+  DEFINE_CLASS_QUERY(MachVEP)
   DEFINE_CLASS_QUERY(Mem)
   DEFINE_CLASS_QUERY(MemBar)
   DEFINE_CLASS_QUERY(MemBarStoreStore)
@@ -1007,6 +1020,7 @@ public:
   DEFINE_CLASS_QUERY(Sub)
   DEFINE_CLASS_QUERY(SubTypeCheck)
   DEFINE_CLASS_QUERY(Type)
+  DEFINE_CLASS_QUERY(InlineType)
   DEFINE_CLASS_QUERY(Vector)
   DEFINE_CLASS_QUERY(VectorMaskCmp)
   DEFINE_CLASS_QUERY(VectorUnbox)

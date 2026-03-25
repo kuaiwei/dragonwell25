@@ -58,6 +58,7 @@ enum class CodeBlobType {
 //    AdapterBlob        : Used to hold C2I/I2C adapters
 //    VtableBlob         : Used for holding vtable chunks
 //    MethodHandlesAdapterBlob : Used to hold MethodHandles adapters
+//    BufferedInlineTypeBlob   : used for pack/unpack handlers
 //   RuntimeStub         : Call to VM runtime methods
 //   SingletonBlob       : Super-class for all blobs that exist in only one instance
 //    DeoptimizationBlob : Used for deoptimization
@@ -83,6 +84,7 @@ enum class CodeBlobKind : u1 {
   Adapter,
   Vtable,
   MHAdapter,
+  BufferedInlineType,
   RuntimeStub,
   Deoptimization,
   Safepoint,
@@ -201,6 +203,7 @@ public:
   bool is_adapter_blob() const                { return _kind == CodeBlobKind::Adapter; }
   bool is_vtable_blob() const                 { return _kind == CodeBlobKind::Vtable; }
   bool is_method_handles_adapter_blob() const { return _kind == CodeBlobKind::MHAdapter; }
+  bool is_buffered_inline_type_blob() const   { return _kind == CodeBlobKind::BufferedInlineType; }
   bool is_upcall_stub() const                 { return _kind == CodeBlobKind::Upcall; }
 
   // Casting
@@ -367,13 +370,15 @@ class BufferBlob: public RuntimeBlob {
   friend class AdapterBlob;
   friend class VtableBlob;
   friend class MethodHandlesAdapterBlob;
+  friend class BufferedInlineTypeBlob;
   friend class UpcallStub;
   friend class WhiteBox;
 
  private:
   // Creation support
   BufferBlob(const char* name, CodeBlobKind kind, int size);
-  BufferBlob(const char* name, CodeBlobKind kind, CodeBuffer* cb, int size);
+  BufferBlob(const char* name, CodeBlobKind kind, CodeBuffer* cb, int size, int header_size);
+  BufferBlob(const char* name, CodeBlobKind kind, CodeBuffer* cb, int size, int frame_complete, int frame_size, OopMapSet* oop_maps, bool caller_must_gc_arguments = false);
 
   void* operator new(size_t s, unsigned size) throw();
 
@@ -405,11 +410,17 @@ class BufferBlob: public RuntimeBlob {
 
 class AdapterBlob: public BufferBlob {
 private:
-  AdapterBlob(int size, CodeBuffer* cb);
+  AdapterBlob(int size, CodeBuffer* cb, int frame_complete, int frame_size, OopMapSet* oop_maps, bool caller_must_gc_arguments = false);
 
 public:
   // Creation
-  static AdapterBlob* create(CodeBuffer* cb);
+  static AdapterBlob* create(CodeBuffer* cb,
+                             int frame_complete,
+                             int frame_size,
+                             OopMapSet* oop_maps,
+                             bool caller_must_gc_arguments = false);
+
+  bool caller_must_gc_arguments(JavaThread* thread) const { return true; }
 };
 
 //---------------------------------------------------------------------------------------------------
@@ -436,6 +447,25 @@ public:
   static MethodHandlesAdapterBlob* create(int buffer_size);
 };
 
+//----------------------------------------------------------------------------------------------------
+// BufferedInlineTypeBlob : used for pack/unpack handlers
+
+class BufferedInlineTypeBlob: public BufferBlob {
+private:
+  const int _pack_fields_off;
+  const int _pack_fields_jobject_off;
+  const int _unpack_fields_off;
+
+  BufferedInlineTypeBlob(int size, CodeBuffer* cb, int pack_fields_off, int pack_fields_jobject_off, int unpack_fields_off);
+
+public:
+  // Creation
+  static BufferedInlineTypeBlob* create(CodeBuffer* cb, int pack_fields_off, int pack_fields_jobject_off, int unpack_fields_off);
+
+  address pack_fields() const { return code_begin() + _pack_fields_off; }
+  address pack_fields_jobject() const { return code_begin() + _pack_fields_jobject_off; }
+  address unpack_fields() const { return code_begin() + _unpack_fields_off; }
+};
 
 //----------------------------------------------------------------------------------------------------
 // RuntimeStub: describes stubs used by compiled code to call a (static) C++ runtime routine

@@ -118,7 +118,6 @@ void CardTableBarrierSetAssembler::store_check(MacroAssembler* masm, Register ob
 void CardTableBarrierSetAssembler::oop_store_at(MacroAssembler* masm, DecoratorSet decorators, BasicType type,
                                                 Address dst, Register val, Register tmp1, Register tmp2, Register tmp3) {
   bool in_heap = (decorators & IN_HEAP) != 0;
-
   bool is_array = (decorators & IS_ARRAY) != 0;
   bool on_anonymous = (decorators & ON_UNKNOWN_OOP_REF) != 0;
   bool precise = is_array || on_anonymous;
@@ -129,7 +128,14 @@ void CardTableBarrierSetAssembler::oop_store_at(MacroAssembler* masm, DecoratorS
   if (needs_post_barrier) {
     // flatten object address if needed
     if (!precise || (dst.index() == noreg && dst.disp() == 0)) {
-      store_check(masm, dst.base(), dst);
+      if (tmp3 != noreg) {
+        // Called by MacroAssembler::pack_inline_helper. We cannot corrupt the dst.base() register
+        __ movptr(tmp3, dst.base());
+        store_check(masm, tmp3, dst);
+      } else {
+        // It's OK to corrupt the dst.base() register.
+        store_check(masm, dst.base(), dst);
+      }
     } else {
       __ lea(tmp1, dst);
       store_check(masm, tmp1, dst);

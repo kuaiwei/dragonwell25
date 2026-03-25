@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,8 +40,17 @@ class JvmtiTagMapKeyClosure;
 // This class is the Key type for inserting in ResizeableResourceHashTable
 // Its get_hash() and equals() methods are also used for getting the hash
 // value of a Key and comparing two Keys, respectively.
+//
+// Valhalla: Keep just one tag for all equal value objects including heap allocated value objects.
+// We have to keep a strong reference to each unique value object with a non-zero tag.
 class JvmtiTagMapKey : public CHeapObj<mtServiceability> {
-  WeakHandle _wh;
+  // All equal value objects should have the same tag.
+  // Keep value objects alive (1 copy for each "value") until their tags are removed.
+  union {
+    WeakHandle _wh;
+    OopHandle _h; // for value objects (_is_weak == false)
+  };
+  bool _is_weak;
   oop _obj; // temporarily hold obj while searching
  public:
   JvmtiTagMapKey(oop obj);
@@ -50,18 +59,10 @@ class JvmtiTagMapKey : public CHeapObj<mtServiceability> {
 
   oop object() const;
   oop object_no_keepalive() const;
-  void release_weak_handle();
+  void release_handle();
 
-  static unsigned get_hash(const JvmtiTagMapKey& entry) {
-    assert(entry._obj != nullptr, "must lookup obj to hash");
-    return (unsigned)entry._obj->identity_hash();
-  }
-
-  static bool equals(const JvmtiTagMapKey& lhs, const JvmtiTagMapKey& rhs) {
-    oop lhs_obj = lhs._obj != nullptr ? lhs._obj : lhs.object_no_keepalive();
-    oop rhs_obj = rhs._obj != nullptr ? rhs._obj : rhs.object_no_keepalive();
-    return lhs_obj == rhs_obj;
-  }
+  static unsigned get_hash(const JvmtiTagMapKey& entry);
+  static bool equals(const JvmtiTagMapKey& lhs, const JvmtiTagMapKey& rhs);
 };
 
 typedef

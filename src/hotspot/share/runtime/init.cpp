@@ -128,6 +128,7 @@ jint init_globals() {
   compilationPolicy_init();
   codeCache_init();
   VM_Version_init();              // depends on codeCache_init for emitting code
+  VMRegImpl::set_regName();       // need this before generate_stubs (for printing oop maps).
   icache_init2();                 // depends on VM_Version for choosing the mechanism
   // stub routines in initial blob are referenced by later generated code
   initial_stubs_init();
@@ -156,7 +157,6 @@ jint init_globals() {
   interpreter_init_stub();   // before methods get loaded
   accessFlags_init();
   InterfaceSupport_init();
-  VMRegImpl::set_regName();  // need this before generate_stubs (for printing oop maps).
   SharedRuntime::generate_stubs();
   AOTCodeCache::init_shared_blobs_table();  // need this after generate_stubs
   SharedRuntime::init_adapter_library(); // do this after AOTCodeCache::init_shared_blobs_table

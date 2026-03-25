@@ -26,6 +26,7 @@
 #include "cds/metaspaceShared.hpp"
 #include "classfile/javaClasses.hpp"
 #include "classfile/moduleEntry.hpp"
+#include "classfile/symbolTable.hpp"
 #include "classfile/vmClasses.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
@@ -37,8 +38,10 @@
 #include "oops/arrayOop.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
+#include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.hpp"
 #include "oops/oop.inline.hpp"
+#include "oops/refArrayKlass.hpp"
 #include "runtime/handles.inline.hpp"
 
 ArrayKlass::ArrayKlass() {
@@ -88,9 +91,10 @@ Method* ArrayKlass::uncached_lookup_method(const Symbol* name,
   return super()->uncached_lookup_method(name, signature, OverpassLookupMode::skip, private_mode);
 }
 
-ArrayKlass::ArrayKlass(Symbol* name, KlassKind kind) :
-  Klass(kind),
+ArrayKlass::ArrayKlass(Symbol* name, KlassKind kind, ArrayProperties props, markWord prototype_header) :
+Klass(kind, prototype_header),
   _dimension(1),
+  _properties(props),
   _higher_dimension(nullptr),
   _lower_dimension(nullptr) {
   // Arrays don't add any new methods, so their vtable is the same size as
@@ -104,6 +108,25 @@ ArrayKlass::ArrayKlass(Symbol* name, KlassKind kind) :
   log_array_class_load(this);
 }
 
+Symbol* ArrayKlass::create_element_klass_array_name(Klass* element_klass, TRAPS) {
+  ResourceMark rm(THREAD);
+  Symbol* name = nullptr;
+  char *name_str = element_klass->name()->as_C_string();
+  int len = element_klass->name()->utf8_length();
+  char *new_str = NEW_RESOURCE_ARRAY(char, len + 4);
+  int idx = 0;
+  new_str[idx++] = JVM_SIGNATURE_ARRAY;
+  if (element_klass->is_instance_klass()) { // it could be an array or simple type
+    new_str[idx++] = JVM_SIGNATURE_CLASS;
+  }
+  memcpy(&new_str[idx], name_str, len * sizeof(char));
+  idx += len;
+  if (element_klass->is_instance_klass()) {
+    new_str[idx++] = JVM_SIGNATURE_ENDCLASS;
+  }
+  new_str[idx++] = '\0';
+  return SymbolTable::new_symbol(new_str);
+}
 
 // Initialization of vtables and mirror object is done separately from base_create_array_klass,
 // since a GC can happen. At this point all instance variables of the ArrayKlass must be setup.
@@ -117,7 +140,16 @@ void ArrayKlass::complete_create_array_klass(ArrayKlass* k, Klass* super_klass, 
   assert((module_entry != nullptr) || ((module_entry == nullptr) && !ModuleEntryTable::javabase_defined()),
          "module entry not available post " JAVA_BASE_NAME " definition");
   oop module = (module_entry != nullptr) ? module_entry->module() : (oop)nullptr;
-  java_lang_Class::create_mirror(k, Handle(THREAD, k->class_loader()), Handle(THREAD, module), Handle(), Handle(), CHECK);
+
+  if (k->is_refArray_klass() || k->is_flatArray_klass()) {
+    assert(super_klass != nullptr, "Must be");
+    assert(k->super() != nullptr, "Must be");
+    assert(k->super() == super_klass, "Must be");
+    Handle mirror(THREAD, super_klass->java_mirror());
+    k->set_java_mirror(mirror);
+  } else {
+    java_lang_Class::create_mirror(k, Handle(THREAD, k->class_loader()), Handle(THREAD, module), Handle(), Handle(), CHECK);
+  }
 }
 
 ArrayKlass* ArrayKlass::array_klass(int n, TRAPS) {
@@ -134,8 +166,7 @@ ArrayKlass* ArrayKlass::array_klass(int n, TRAPS) {
 
     if (higher_dimension() == nullptr) {
       // Create multi-dim klass object and link them together
-      ObjArrayKlass* ak =
-          ObjArrayKlass::allocate_objArray_klass(class_loader_data(), dim + 1, this, CHECK_NULL);
+      ObjArrayKlass* ak = RefArrayKlass::allocate_objArray_klass(class_loader_data(), dim + 1, this, CHECK_NULL);
       // use 'release' to pair with lock-free load
       release_set_higher_dimension(ak);
       assert(ak->lower_dimension() == this, "lower dimension mismatch");
@@ -185,12 +216,17 @@ GrowableArray<Klass*>* ArrayKlass::compute_secondary_supers(int num_extra_slots,
 
 objArrayOop ArrayKlass::allocate_arrayArray(int n, int length, TRAPS) {
   check_array_allocation_length(length, arrayOopDesc::max_array_length(T_ARRAY), CHECK_NULL);
-  size_t size = objArrayOopDesc::object_size(length);
+  size_t size = refArrayOopDesc::object_size(length);
   ArrayKlass* ak = array_klass(n + dimension(), CHECK_NULL);
-  objArrayOop o = (objArrayOop)Universe::heap()->array_allocate(ak, size, length,
+  ObjArrayKlass* oak = ObjArrayKlass::cast(ak)->klass_with_properties(ArrayProperties::DEFAULT, CHECK_NULL);
+  objArrayOop o = (objArrayOop)Universe::heap()->array_allocate(oak, size, length,
                                                                 /* do_zero */ true, CHECK_NULL);
   // initialization to null not necessary, area already cleared
   return o;
+}
+
+oop ArrayKlass::component_mirror() const {
+  return java_lang_Class::component_mirror(java_mirror());
 }
 
 // JVMTI support
@@ -232,7 +268,7 @@ void ArrayKlass::restore_unshareable_info(ClassLoaderData* loader_data, Handle p
   // Klass recreates the component mirror also
 
   if (_higher_dimension != nullptr) {
-    ArrayKlass *ak = higher_dimension();
+    ObjArrayKlass *ak = higher_dimension();
     log_array_class_load(ak);
     ak->restore_unshareable_info(loader_data, protection_domain, CHECK);
   }

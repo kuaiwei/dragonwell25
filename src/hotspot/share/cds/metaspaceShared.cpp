@@ -77,6 +77,8 @@
 #include "memory/universe.hpp"
 #include "nmt/memTracker.hpp"
 #include "oops/compressedKlass.hpp"
+#include "oops/flatArrayKlass.hpp"
+#include "oops/inlineKlass.hpp"
 #include "oops/instanceMirrorKlass.hpp"
 #include "oops/klass.inline.hpp"
 #include "oops/objArrayOop.hpp"
@@ -124,7 +126,7 @@ bool MetaspaceShared::_use_optimized_module_handling = true;
 // These regions are aligned with MetaspaceShared::core_region_alignment().
 //
 // These 2 regions are populated in the following steps:
-// [0] All classes are loaded in MetaspaceShared::preload_classes(). All metadata are
+// [0] All classes are loaded in MetaspaceShared::loadable_descriptors(). All metadata are
 //     temporarily allocated outside of the shared regions.
 // [1] We enter a safepoint and allocate a buffer for the rw/ro regions.
 // [2] C++ vtables are copied into the rw region.
@@ -460,7 +462,7 @@ void MetaspaceShared::serialize(SerializeClosure* soc) {
   soc->do_tag(arrayOopDesc::base_offset_in_bytes(T_BYTE));
   soc->do_tag(sizeof(ConstantPool));
   soc->do_tag(sizeof(ConstantPoolCache));
-  soc->do_tag(objArrayOopDesc::base_offset_in_bytes());
+  soc->do_tag(refArrayOopDesc::base_offset_in_bytes());
   soc->do_tag(typeArrayOopDesc::base_offset_in_bytes(T_BYTE));
   soc->do_tag(sizeof(Symbol));
 
@@ -875,7 +877,7 @@ void MetaspaceShared::get_default_classlist(char* default_classlist, const size_
                Arguments::get_java_home(), filesep, filesep);
 }
 
-void MetaspaceShared::preload_classes(TRAPS) {
+void MetaspaceShared::loadable_descriptors(TRAPS) {
   char default_classlist[JVM_MAXPATHLEN];
   const char* classlist_path;
 
@@ -922,7 +924,7 @@ void MetaspaceShared::exercise_runtime_cds_code(TRAPS) {
 void MetaspaceShared::preload_and_dump_impl(StaticArchiveBuilder& builder, TRAPS) {
   if (CDSConfig::is_dumping_classic_static_archive()) {
     // We are running with -Xshare:dump
-    preload_classes(CHECK);
+    loadable_descriptors(CHECK);
 
     if (SharedArchiveConfigFile) {
       log_info(aot)("Reading extra data from %s ...", SharedArchiveConfigFile);
@@ -1227,6 +1229,11 @@ bool MetaspaceShared::try_link_class(JavaThread* current, InstanceKlass* ik) {
 }
 
 void VM_PopulateDumpSharedSpace::dump_java_heap_objects() {
+  if (CDSConfig::is_valhalla_preview()) {
+    log_info(cds)("Archived java heap is not yet supported with Valhalla preview");
+    return;
+  }
+
   if (CDSConfig::is_dumping_heap()) {
     HeapShared::write_heap(&_heap_info);
   } else {

@@ -29,12 +29,13 @@
 
 // ciType
 //
-// This class represents a Java reference or primitive type.
+// This class represents a Java reference, inline type or primitive type.
 
 class ciType : public ciMetadata {
   CI_PACKAGE_ACCESS
   friend class ciKlass;
   friend class ciReturnAddress;
+  friend class ciWrapper;
 
 private:
   BasicType _basic_type;
@@ -70,6 +71,10 @@ public:
   // What kind of ciObject is this?
   bool is_type() const                      { return true; }
   bool is_classless() const                 { return is_primitive_type(); }
+  virtual bool is_wrapper() const           { return false; }
+
+  virtual ciType* unwrap()                  { return this; }
+  virtual bool is_null_free() const         { return false; }
 
   const char* name();
   virtual void print_name_on(outputStream* st);
@@ -104,6 +109,33 @@ public:
   int  bci() { return _bci; }
 
   static ciReturnAddress* make(int bci);
+};
+
+// ciWrapper
+//
+// This class wraps another type to carry additional information.
+class ciWrapper : public ciType {
+  CI_PACKAGE_ACCESS
+
+private:
+  ciType* _type;
+  enum Property {
+    NullFree = 1,
+    EarlyLarval = NullFree << 1,
+  };
+  int _properties;
+
+  ciWrapper(ciType* type, int properties);
+
+  const char* type_string() override { return "ciWrapper"; }
+
+  void print_impl(outputStream* st) override { _type->print_impl(st); }
+
+public:
+  ciType* unwrap() override { return _type; }
+  bool is_null_free() const override { return (_properties & (NullFree | EarlyLarval)) != 0; }
+  bool is_early_larval() const override { return (_properties & EarlyLarval) != 0; }
+  bool is_wrapper() const override { return true; }
 };
 
 #endif // SHARE_CI_CITYPE_HPP

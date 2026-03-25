@@ -479,6 +479,7 @@
  *     | EnclosingMethodAttribute?(ClassEntry className, NameAndTypeEntry method)
  *     | InnerClassesAttribute?(List<InnerClassInfo> classes)
  *     | PermittedSubclassesAttribute?(List<ClassEntry> permittedSubclasses)
+ *     | LoadableDescriptorsAttribute?(List<Utf8Entry> loadableDescriptors)
  *     | DeclarationElement*
  * }
  *

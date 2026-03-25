@@ -80,7 +80,7 @@ class MetaspaceShared : AllStatic {
 private:
   static void exercise_runtime_cds_code(TRAPS) NOT_CDS_RETURN;
   static void preload_and_dump_impl(StaticArchiveBuilder& builder, TRAPS) NOT_CDS_RETURN;
-  static void preload_classes(TRAPS) NOT_CDS_RETURN;
+  static void loadable_descriptors(TRAPS) NOT_CDS_RETURN;
 
 public:
   static Symbol* symbol_rs_base() {

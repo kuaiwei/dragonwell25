@@ -65,6 +65,7 @@
 #include "oops/objLayout.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/oopHandle.inline.hpp"
+#include "oops/refArrayKlass.hpp"
 #include "oops/typeArrayKlass.hpp"
 #include "prims/resolvedMethodTable.hpp"
 #include "runtime/arguments.hpp"
@@ -110,6 +111,8 @@ static LatestMethodCache _loader_addClass_cache;            // ClassLoader.addCl
 static LatestMethodCache _throw_illegal_access_error_cache; // Unsafe.throwIllegalAccessError()
 static LatestMethodCache _throw_no_such_method_error_cache; // Unsafe.throwNoSuchMethodError()
 static LatestMethodCache _do_stack_walk_cache;              // AbstractStackWalker.doStackWalk()
+static LatestMethodCache _is_substitutable_cache;           // ValueObjectMethods.isSubstitutable()
+static LatestMethodCache _value_object_hash_code_cache;     // ValueObjectMethods.valueObjectHashCode()
 
 // Known objects
 TypeArrayKlass* Universe::_typeArrayKlasses[T_LONG+1] = { nullptr /*, nullptr...*/ };
@@ -452,6 +455,7 @@ void Universe::genesis(TRAPS) {
              vmClasses::Cloneable_klass(), "u3");
       assert(_the_array_interfaces_array->at(1) ==
              vmClasses::Serializable_klass(), "u3");
+
     } else
 #endif
     {
@@ -499,16 +503,13 @@ void Universe::genesis(TRAPS) {
   // SystemDictionary::initialize(CHECK); is run. See the extra check
   // for Object_klass_loaded in objArrayKlassKlass::allocate_objArray_klass_impl.
   {
-    Klass* oak = vmClasses::Object_klass()->array_klass(CHECK);
-    _objectArrayKlass = ObjArrayKlass::cast(oak);
+    ArrayKlass* oak = vmClasses::Object_klass()->array_klass(CHECK);
+    oak->append_to_sibling_list();
+
+    // Create a RefArrayKlass (which is the default) and initialize.
+    ObjArrayKlass* rak = ObjArrayKlass::cast(oak)->klass_with_properties(ArrayKlass::ArrayProperties::DEFAULT, THREAD);
+    _objectArrayKlass = rak;
   }
-  // OLD
-  // Add the class to the class hierarchy manually to make sure that
-  // its vtable is initialized after core bootstrapping is completed.
-  // ---
-  // New
-  // Have already been initialized.
-  _objectArrayKlass->append_to_sibling_list();
 
   #ifdef ASSERT
   if (FullGCALot) {
@@ -640,6 +641,9 @@ static void reinitialize_vtables() {
     Klass* sub = iter.klass();
     sub->vtable().initialize_vtable();
   }
+
+  // This isn't added to the subclass list, so need to reinitialize vtables directly.
+  Universe::objectArrayKlass()->vtable().initialize_vtable();
 }
 
 static void reinitialize_itables() {
@@ -885,7 +889,6 @@ jint universe_init() {
   Universe::initialize_tlab();
 
   Metaspace::global_initialize();
-
   // Initialize performance counters for metaspaces
   MetaspaceCounters::initialize_performance_counters();
 
@@ -1040,6 +1043,8 @@ Method* Universe::loader_addClass_method()        { return _loader_addClass_cach
 Method* Universe::throw_illegal_access_error()    { return _throw_illegal_access_error_cache.get_method(); }
 Method* Universe::throw_no_such_method_error()    { return _throw_no_such_method_error_cache.get_method(); }
 Method* Universe::do_stack_walk_method()          { return _do_stack_walk_cache.get_method(); }
+Method* Universe::is_substitutable_method()       { return _is_substitutable_cache.get_method(); }
+Method* Universe::value_object_hash_code_method() { return _value_object_hash_code_cache.get_method(); }
 
 void Universe::initialize_known_methods(JavaThread* current) {
   // Set up static method for registering finalizers
@@ -1069,6 +1074,17 @@ void Universe::initialize_known_methods(JavaThread* current) {
                           vmClasses::AbstractStackWalker_klass(),
                           "doStackWalk",
                           vmSymbols::doStackWalk_signature(), false);
+
+  // Set up substitutability testing
+  ResourceMark rm(current);
+  _is_substitutable_cache.init(current,
+                          vmClasses::ValueObjectMethods_klass(),
+                          vmSymbols::isSubstitutable_name()->as_C_string(),
+                          vmSymbols::object_object_boolean_signature(), true);
+  _value_object_hash_code_cache.init(current,
+                          vmClasses::ValueObjectMethods_klass(),
+                          vmSymbols::valueObjectHashCode_name()->as_C_string(),
+                          vmSymbols::object_int_signature(), true);
 }
 
 void universe2_init() {

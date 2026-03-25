@@ -35,6 +35,7 @@
 #include "memory/universe.hpp"
 #include "prims/jvmtiAgentList.hpp"
 #include "runtime/arguments.hpp"
+#include "runtime/globals.hpp"
 #include "runtime/globals_extension.hpp"
 #include "runtime/java.hpp"
 #include "runtime/vmThread.hpp"
@@ -54,6 +55,9 @@ bool CDSConfig::_has_temp_aot_config_file = false;
 bool CDSConfig::_old_cds_flags_used = false;
 bool CDSConfig::_new_aot_flags_used = false;
 bool CDSConfig::_disable_heap_dumping = false;
+
+bool CDSConfig::_module_patching_disables_cds = false;
+bool CDSConfig::_java_base_module_patching_disables_cds = false;
 
 const char* CDSConfig::_default_archive_path = nullptr;
 const char* CDSConfig::_input_static_archive_path = nullptr;
@@ -126,6 +130,9 @@ const char* CDSConfig::default_archive_path() {
       tmp.print_raw("_coh");
     }
 #endif
+    if (is_valhalla_preview()) {
+      tmp.print_raw("_valhalla");
+    }
     tmp.print_raw(".jsa");
     _default_archive_path = os::strdup(tmp.base());
   }
@@ -281,7 +288,7 @@ void CDSConfig::ergo_init_classic_archive_paths() {
 }
 
 void CDSConfig::check_internal_module_property(const char* key, const char* value) {
-  if (Arguments::is_incompatible_cds_internal_module_property(key)) {
+  if (Arguments::is_incompatible_cds_internal_module_property(key) && !Arguments::patching_migrated_classes(key, value)) {
     stop_using_optimized_module_handling();
     aot_log_info(aot)("optimized module handling: disabled due to incompatible property: %s=%s", key, value);
   }
@@ -314,13 +321,11 @@ static const char* find_any_unsupported_module_option() {
   // directly specified in the command-line.
   static const char* unsupported_module_properties[] = {
     "jdk.module.limitmods",
-    "jdk.module.upgrade.path",
-    "jdk.module.patch.0"
+    "jdk.module.upgrade.path"
   };
   static const char* unsupported_module_options[] = {
     "--limit-modules",
-    "--upgrade-module-path",
-    "--patch-module"
+    "--upgrade-module-path"
   };
 
   assert(ARRAY_SIZE(unsupported_module_properties) == ARRAY_SIZE(unsupported_module_options), "must be");
@@ -343,6 +348,12 @@ void CDSConfig::check_unsupported_dumping_module_options() {
   if (option != nullptr) {
     vm_exit_during_initialization("Cannot use the following option when dumping the shared archive", option);
   }
+
+  if (module_patching_disables_cds()) {
+    vm_exit_during_initialization(
+            "Cannot use the following option when dumping the shared archive", "--patch-module");
+  }
+
   // Check for an exploded module build in use with -Xshare:dump.
   if (!Arguments::has_jimage()) {
     vm_exit_during_initialization("Dumping the shared archive is not supported with an exploded module build");
@@ -371,6 +382,16 @@ bool CDSConfig::has_unsupported_runtime_module_options() {
     }
     return true;
   }
+
+  if (module_patching_disables_cds()) {
+    if (RequireSharedSpaces) {
+      warning("CDS is disabled when the %s option is specified.", "--patch-module");
+    } else {
+      log_info(cds)("CDS is disabled when the %s option is specified.", "--patch-module");
+    }
+    return true;
+  }
+
   return false;
 }
 
@@ -608,7 +629,7 @@ void CDSConfig::ergo_init_aot_paths() {
   }
 }
 
-bool CDSConfig::check_vm_args_consistency(bool patch_mod_javabase, bool mode_flag_cmd_line) {
+bool CDSConfig::check_vm_args_consistency(bool mode_flag_cmd_line) {
   assert(!_cds_ergo_initialize_started, "This is called earlier than CDSConfig::ergo_initialize()");
 
   check_aot_flags();
@@ -674,7 +695,7 @@ bool CDSConfig::check_vm_args_consistency(bool patch_mod_javabase, bool mode_fla
     }
   }
 
-  if (is_using_archive() && patch_mod_javabase) {
+  if (is_using_archive() && java_base_module_patching_disables_cds() && module_patching_disables_cds()) {
     Arguments::no_shared_spaces("CDS is disabled when " JAVA_BASE_NAME " module is patched.");
   }
   if (is_using_archive() && has_unsupported_runtime_module_options()) {
@@ -893,6 +914,10 @@ bool CDSConfig::are_vm_options_incompatible_with_dumping_heap() {
 }
 
 bool CDSConfig::is_dumping_heap() {
+  if (is_valhalla_preview()) {
+    // Not working yet -- e.g., HeapShared::oop_hash() needs to be implemented for value oops
+    return false;
+  }
   if (!(is_dumping_classic_static_archive() || is_dumping_final_static_archive())
       || are_vm_options_incompatible_with_dumping_heap()
       || _disable_heap_dumping) {

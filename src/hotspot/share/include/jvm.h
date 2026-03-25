@@ -175,6 +175,9 @@ JNIEXPORT jboolean JNICALL
 JVM_IsPreviewEnabled(void);
 
 JNIEXPORT jboolean JNICALL
+JVM_IsValhallaEnabled(void);
+
+JNIEXPORT jboolean JNICALL
 JVM_IsContinuationsSupported(void);
 
 JNIEXPORT jboolean JNICALL
@@ -554,6 +557,9 @@ JVM_IsInterface(JNIEnv *env, jclass cls);
 
 JNIEXPORT jboolean JNICALL
 JVM_IsHiddenClass(JNIEnv *env, jclass cls);
+
+JNIEXPORT jboolean JNICALL
+JVM_IsIdentityClass(JNIEnv *env, jclass cls);
 
 JNIEXPORT jobjectArray JNICALL
 JVM_GetDeclaredClasses(JNIEnv *env, jclass ofClass);
@@ -1090,6 +1096,27 @@ JVM_InitAgentProperties(JNIEnv *env, jobject agent_props);
 
 JNIEXPORT jstring JNICALL
 JVM_GetTemporaryDirectory(JNIEnv *env);
+
+JNIEXPORT jarray JNICALL
+JVM_CopyOfSpecialArray(JNIEnv *env, jarray orig, jint from, jint to);
+
+JNIEXPORT jarray JNICALL
+JVM_NewNullRestrictedNonAtomicArray(JNIEnv *env, jclass elmClass, jint len, jobject initVal);
+
+JNIEXPORT jarray JNICALL
+JVM_NewNullRestrictedAtomicArray(JNIEnv *env, jclass elmClass, jint len, jobject initVal);
+
+JNIEXPORT jarray JNICALL
+JVM_NewNullableAtomicArray(JNIEnv *env, jclass elmClass, jint len);
+
+JNIEXPORT jboolean JNICALL
+JVM_IsFlatArray(JNIEnv *env, jobject obj);
+
+JNIEXPORT jboolean JNICALL
+JVM_IsNullRestrictedArray(JNIEnv *env, jobject obj);
+
+JNIEXPORT jboolean JNICALL
+JVM_IsAtomicArray(JNIEnv *env, jobject obj);
 
 /* Generics reflection support.
  *

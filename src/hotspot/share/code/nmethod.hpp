@@ -27,6 +27,7 @@
 
 #include "code/codeBlob.hpp"
 #include "code/pcDesc.hpp"
+#include "compiler/compilerDefinitions.hpp"
 #include "oops/metadata.hpp"
 #include "oops/method.hpp"
 
@@ -213,6 +214,10 @@ class nmethod : public CodeBlob {
   address  _osr_entry_point;       // entry point for on stack replacement
   uint16_t _entry_offset;          // entry point with class check
   uint16_t _verified_entry_offset; // entry point without class check
+  // TODO: can these be uint16_t, seem rely on -1 CodeOffset, can change later...
+  address _inline_entry_point;              // inline type entry point (unpack all inline type args) with class check
+  address _verified_inline_entry_point;     // inline type entry point (unpack all inline type args) without class check
+  address _verified_inline_ro_entry_point;  // inline type entry point (unpack receiver only) without class check
   int      _entry_bci;             // != InvocationEntryBci if this nmethod is an on-stack replacement method
   int      _immutable_data_size;
 
@@ -686,6 +691,9 @@ public:
   // entry points
   address entry_point() const          { return code_begin() + _entry_offset;          } // normal entry point
   address verified_entry_point() const { return code_begin() + _verified_entry_offset; } // if klass is correct
+  address inline_entry_point() const              { return _inline_entry_point; }             // inline type entry point (unpack all inline type args)
+  address verified_inline_entry_point() const     { return _verified_inline_entry_point; }    // inline type entry point (unpack all inline type args) without class check
+  address verified_inline_ro_entry_point() const  { return _verified_inline_ro_entry_point; } // inline type entry point (only unpack receiver) without class check
 
   enum : signed char { not_installed = -1, // in construction, only the owner doing the construction is
                                            // allowed to advance state
@@ -754,6 +762,16 @@ public:
 
   bool  has_wide_vectors() const                  { return _has_wide_vectors; }
   void  set_has_wide_vectors(bool z)              { _has_wide_vectors = z; }
+
+  bool  needs_stack_repair() const {
+    if (is_compiled_by_c1()) {
+      return method()->c1_needs_stack_repair();
+    } else if (is_compiled_by_c2()) {
+      return method()->c2_needs_stack_repair();
+    } else {
+      return false;
+    }
+  }
 
   bool  has_flushed_dependencies() const          { return _has_flushed_dependencies; }
   void  set_has_flushed_dependencies(bool z)      {
